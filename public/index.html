@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Web Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        :root {
+            --app-bg: #0b141a;
+            --sidebar-bg: #111b21;
+            --chat-bg: #0b141a;
+            --active-bg: #2a3942;
+            --hover-bg: #202c33;
+            --text-primary: #e9edef;
+            --text-secondary: #8696a0;
+            --primary-accent: #00a884;
+            --message-out: #005c4b;
+            --message-in: #202c33;
+            --border-color: #222d34;
+            --danger: #ea0038;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background: #000;
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #app {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            background: var(--app-bg);
+        }
+
+        /* Sidebar Style */
+        .sidebar {
+            width: 350px;
+            min-width: 300px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 10px 16px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--sidebar-bg);
+        }
+
+        .profile-img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #51585c;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+
+        .sidebar-actions button {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 8px;
+            font-size: 1.2rem;
+        }
+
+        .chat-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .chat-item {
+            display: flex;
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .chat-item:hover {
+            background: var(--hover-bg);
+        }
+
+        .chat-item.active {
+            background: var(--active-bg);
+        }
+
+        .chat-info {
+            flex: 1;
+            margin-left: 15px;
+            overflow: hidden;
+        }
+
+        .chat-info h3 {
+            font-size: 1rem;
+            font-weight: 400;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .chat-info p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Main Chat Style */
+        .main-chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--chat-bg);
+            position: relative;
+        }
+
+        .chat-header {
+            height: 60px;
+            background: var(--sidebar-bg);
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .messages {
+            flex: 1;
+            padding: 20px 5%;
+            overflow-y: auto;
+            background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');
+            background-blend-mode: overlay;
+        }
+
+        .msg-bubble {
+            max-width: 65%;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            position: relative;
+            line-height: 1.4;
+            clear: both;
+        }
+
+        .msg-bubble span.time {
+            font-size: 0.65rem;
+            color: rgba(255, 255, 255, 0.5);
+            display: block;
+            text-align: right;
+            margin-top: 4px;
+        }
+
+        .msg-out {
+            background: var(--message-out);
+            float: right;
+            border-top-right-radius: 0;
+        }
+
+        .msg-in {
+            background: var(--message-in);
+            float: left;
+            border-top-left-radius: 0;
+        }
+
+        .chat-input {
+            padding: 10px 16px;
+            background: var(--sidebar-bg);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .chat-input input {
+            flex: 1;
+            background: var(--hover-bg);
+            border: none;
+            border-radius: 8px;
+            padding: 10px 16px;
+            color: var(--text-primary);
+            outline: none;
+        }
+
+        .chat-input button {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 1.5rem;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Flow Config Styles */
+        #flow-config-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--app-bg);
+            z-index: 500;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .config-header {
+            padding: 20px 40px;
+            background: var(--sidebar-bg);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .config-content {
+            flex: 1;
+            padding: 40px;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+        }
+
+        .flow-list {
+            background: var(--sidebar-bg);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--border-color);
+        }
+
+        .flow-card {
+            background: var(--hover-bg);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .flow-card h4 {
+            color: var(--primary-accent);
+        }
+
+        .flow-form {
+            background: var(--sidebar-bg);
+            border-radius: 12px;
+            padding: 30px;
+            border: 1px solid var(--border-color);
+        }
+
+        input,
+        textarea,
+        select {
+            width: 100%;
+            padding: 12px;
+            background: var(--app-bg);
+            border: 1px solid var(--border-color);
+            color: white;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            outline: none;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            border: none;
+            font-weight: 600;
+        }
+
+        .btn-primary {
+            background: var(--primary-accent);
+            color: white;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+
+        /* Modals */
+        }
+
+        /* DB Status Indicator */
+        .db-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-left: 10px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--danger);
+            box-shadow: 0 0 5px var(--danger);
+            transition: all 0.3s;
+        }
+
+        .status-dot.online {
+            background: var(--primary-accent);
+            box-shadow: 0 0 5px var(--primary-accent);
+        }
+
+        /* Dizimistas Grid Overlay */
+        #dizimistas-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--app-bg);
+            z-index: 550;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .dizimistas-table {
+            width: 100%;
+            border-collapse: collapse;
+            color: var(--text-primary);
+        }
+
+        .dizimistas-table th {
+            text-align: left;
+            padding: 15px;
+            background: var(--hover-bg);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+        }
+
+        .dizimistas-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .dizimistas-table tr:hover {
+            background: var(--hover-bg);
+        }
+
+        .action-cell {
+            text-align: right;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="qr-overlay" class="hidden"
+        style="position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+        <div id="qrcode" style="background: white; padding: 20px; border-radius: 10px; margin-bottom: 20px;"></div>
+        <p>Escaneie o QR Code no seu WhatsApp</p>
+    </div>
+
+    <div id="app">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div style="display: flex; align-items: center;">
+                    <div class="profile-img">TU</div>
+                    <div class="db-status" id="db-status-container">
+                        <div class="status-dot" id="db-status-dot"></div>
+                        <span id="db-status-text">Oracle OCI</span>
+                    </div>
+                </div>
+                <div class="sidebar-actions">
+                    <button onclick="toggleDizimistas()" title="Dizimistas com Celular">👥</button>
+                    <button onclick="toggleFlowConfig()" title="Configurações de Fluxo">⚙️</button>
+                    <button onclick="toggleNewChatModal()" title="Nova Conversa">➕</button>
+                    <button title="Menu">⋮</button>
+                </div>
+            </div>
+
+            <div class="chat-list" id="chat-list-container">
+            </div>
+        </div>
+
+        <!-- Main Area -->
+        <div class="main-chat">
+            <div id="welcome" class="welcome-screen"
+                style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
+                <img src="https://static.whatsapp.net/rsrc.php/v3/y6/r/wa669ae5z23.png" width="150">
+                <h1 style="margin-top: 20px;">WhatsApp Web Pro</h1>
+                <p style="color: var(--text-secondary);">Gerencie seus fluxos e conversas.</p>
+            </div>
+
+            <div id="chat-window" class="hidden" style="height: 100%; display: flex; flex-direction: column;">
+                <div class="chat-header">
+                    <h4 id="active-chat-name">Nome do Contato</h4>
+                </div>
+                <div class="messages" id="messages-container"></div>
+                <div class="chat-input">
+                    <input type="text" id="message-input" placeholder="Digite uma mensagem"
+                        onkeypress="handleKeyPress(event)">
+                    <button onclick="emitMessage()">✈️</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Flow Config Overlay -->
+    <div id="flow-config-overlay" class="hidden">
+        <div class="config-header">
+            <h2>Configurações de Fluxo de Conversa</h2>
+            <button class="btn btn-ghost" onclick="toggleFlowConfig()">Sair [X]</button>
+        </div>
+        <div class="config-content">
+            <div class="flow-list">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                    <h3>Fluxos Cadastrados</h3>
+                    <button class="btn btn-primary" onclick="prepareNewFlow()">+ Novo Fluxo</button>
+                </div>
+                <div id="db-flow-container">
+                    <!-- Flows from DB -->
+                </div>
+            </div>
+
+            <div class="flow-form">
+                <h3 id="form-title">Editar Fluxo</h3>
+                <label>ID Único (ex: start, menu_venda)</label>
+                <input type="text" id="flow-id" placeholder="ID do Fluxo">
+
+                <label>Palavras Gatilho (separadas por vírgula - opcional)</label>
+                <input type="text" id="flow-triggers" placeholder="oi, ajuda, menu">
+
+                <label>Mensagem de Resposta</label>
+                <textarea id="flow-message" rows="4" placeholder="Olá! Selecione uma opção..."></textarea>
+
+                <h4>Opções (1, 2, 3...)</h4>
+                <div id="options-builder">
+                    <!-- Dynamic options inputs -->
+                </div>
+                <button class="btn btn-ghost" onclick="addOptionField()" style="margin-bottom: 20px;">+ Adicionar
+                    Opção</button>
+
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-primary" onclick="saveFlow()">Salvar Fluxo</button>
+                    <button class="btn btn-danger hidden" id="delete-btn" onclick="deleteFlow()">Excluir</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Chat Modal -->
+    <div id="new-chat-modal" class="modal hidden">
+        <div class="modal-content"
+            style="background: var(--sidebar-bg); padding: 30px; border-radius: 15px; width: 400px;">
+            <h2>Nova Conversa</h2><br>
+            <input type="text" id="new-phone" placeholder="5511999999999">
+            <button class="btn btn-primary" onclick="startNewChat()">Iniciar</button>
+            <button class="btn btn-ghost" onclick="toggleNewChatModal()">Cancelar</button>
+        </div>
+    </div>
+
+    <!-- Dizimistas Overlay -->
+    <div id="dizimistas-overlay" class="hidden">
+        <div class="config-header">
+            <h2>Dizimistas com Telefone (Oracle)</h2>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="dizimista-search" placeholder="Pesquisar nome..."
+                    style="margin-bottom: 0; width: 250px;" oninput="filterDizimistas()">
+                <button class="btn btn-ghost" onclick="toggleDizimistas()">Sair [X]</button>
+            </div>
+        </div>
+        <div style="flex: 1; overflow-y: auto; padding: 20px 40px;">
+            <table class="dizimistas-table">
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Telefone</th>
+                        <th class="action-cell">Ação</th>
+                    </tr>
+                </thead>
+                <tbody id="dizimistas-list">
+                    <!-- Loaded from API -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let activeChatId = null;
+        let qrcodeInstance = null;
+        let currentOptions = {};
+
+        socket.on('qr', (qr) => {
+            document.getElementById('qr-overlay').classList.remove('hidden');
+            if (qrcodeInstance) {
+                qrcodeInstance.clear();
+                qrcodeInstance.makeCode(qr);
+            } else {
+                qrcodeInstance = new QRCode(document.getElementById("qrcode"), { text: qr, width: 200, height: 200 });
+            }
+        });
+
+        socket.on('ready', () => {
+            document.getElementById('qr-overlay').classList.add('hidden');
+            socket.emit('get-chats');
+        });
+
+        socket.on('chats', (chats) => {
+            const container = document.getElementById('chat-list-container');
+            container.innerHTML = '';
+            chats.forEach(chat => {
+                const item = document.createElement('div');
+                item.className = `chat-item ${activeChatId === chat.id ? 'active' : ''}`;
+                item.onclick = () => selectChat(chat.id, chat.name);
+                item.innerHTML = `
+                    <div class="profile-img">${chat.name.charAt(0)}</div>
+                    <div class="chat-info"><h3>${chat.name}</h3><p>${chat.unreadCount > 0 ? `<b>${chat.unreadCount} novas</b>` : 'Ver conversa'}</p></div>
+                `;
+                container.appendChild(item);
+            });
+        });
+
+        socket.on('history', (data) => {
+            if (data.chatId !== activeChatId) return;
+            const container = document.getElementById('messages-container');
+            container.innerHTML = '';
+            data.messages.forEach(msg => appendMessage(msg));
+            container.scrollTop = container.scrollHeight;
+        });
+
+        socket.on('new-message', (data) => {
+            if (data.chatId === activeChatId) {
+                appendMessage(data);
+                const container = document.getElementById('messages-container');
+                container.scrollTop = container.scrollHeight;
+            }
+            socket.emit('get-chats');
+        });
+
+        function selectChat(id, name) {
+            activeChatId = id;
+            document.getElementById('welcome').classList.add('hidden');
+            document.getElementById('chat-window').classList.remove('hidden');
+            document.getElementById('active-chat-name').innerText = name;
+            socket.emit('get-history', id);
+        }
+
+        function appendMessage(msg) {
+            const container = document.getElementById('messages-container');
+            const div = document.createElement('div');
+            div.className = `msg-bubble ${msg.fromMe ? 'msg-out' : 'msg-in'}`;
+            div.innerHTML = `${msg.body}<span class="time">${msg.timestamp}</span>`;
+            container.appendChild(div);
+        }
+
+        function emitMessage() {
+            const input = document.getElementById('message-input');
+            const text = input.value.trim();
+            if (!text || !activeChatId) return;
+            socket.emit('send-message', { chatId: activeChatId, message: text });
+            input.value = '';
+        }
+
+        function handleKeyPress(e) { if (e.key === 'Enter') emitMessage(); }
+        function toggleNewChatModal() { document.getElementById('new-chat-modal').classList.toggle('hidden'); }
+        function startNewChat() {
+            const phone = document.getElementById('new-phone').value.trim();
+            if (phone) { selectChat(null, phone); socket.emit('send-message', { number: phone, message: 'Olá!' }); toggleNewChatModal(); }
+        }
+
+        // --- Flow Configuration Logic ---
+        function toggleFlowConfig() {
+            document.getElementById('flow-config-overlay').classList.toggle('hidden');
+            if (!document.getElementById('flow-config-overlay').classList.contains('hidden')) {
+                loadFlows();
+            }
+        }
+
+        async function loadFlows() {
+            const res = await fetch('/api/flows');
+            const flows = await res.json();
+            const container = document.getElementById('db-flow-container');
+            container.innerHTML = '';
+            flows.forEach(flow => {
+                const card = document.createElement('div');
+                card.className = 'flow-card';
+                card.innerHTML = `
+                    <div><h4>${flow.id}</h4><p style="font-size: 0.8rem; color: var(--text-secondary)">${flow.triggers || 'Sem gatilho'}</p></div>
+                    <button class="btn btn-ghost" onclick='editFlow(${JSON.stringify(flow)})'>Editar</button>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function editFlow(flow) {
+            document.getElementById('form-title').innerText = 'Editar Fluxo: ' + flow.id;
+            document.getElementById('flow-id').value = flow.id;
+            document.getElementById('flow-id').disabled = true;
+            document.getElementById('flow-triggers').value = flow.triggers;
+            document.getElementById('flow-message').value = flow.message;
+            document.getElementById('delete-btn').classList.remove('hidden');
+
+            const builder = document.getElementById('options-builder');
+            builder.innerHTML = '';
+            for (const [key, opt] of Object.entries(flow.options)) {
+                addOptionField(key, opt);
+            }
+        }
+
+        function prepareNewFlow() {
+            document.getElementById('form-title').innerText = 'Novo Fluxo';
+            document.getElementById('flow-id').value = '';
+            document.getElementById('flow-id').disabled = false;
+            document.getElementById('flow-triggers').value = '';
+            document.getElementById('flow-message').value = '';
+            document.getElementById('options-builder').innerHTML = '';
+            document.getElementById('delete-btn').classList.add('hidden');
+        }
+
+        function addOptionField(key = '', opt = { type: 'reply', value: '', nextFlow: '' }) {
+            const div = document.createElement('div');
+            div.style.display = 'flex';
+            div.style.gap = '10px';
+            div.style.marginBottom = '10px';
+            div.className = 'option-row';
+            div.innerHTML = `
+                <input type="text" placeholder="Opção (Ex: 1)" value="${key}" style="width: 80px;" class="opt-key">
+                <select class="opt-type" style="width: 120px;">
+                    <option value="reply" ${opt.type === 'reply' ? 'selected' : ''}>Resposta</option>
+                    <option value="flow" ${opt.type === 'flow' ? 'selected' : ''}>Próx. Fluxo</option>
+                    <option value="function" ${opt.type === 'function' ? 'selected' : ''}>Função</option>
+                </select>
+                <input type="text" placeholder="Valor / ID Próx Fluxo" value="${opt.value}" class="opt-value">
+                <button onclick="this.parentElement.remove()" style="background: none; border: none; color: var(--danger); cursor: pointer;">[X]</button>
+            `;
+            document.getElementById('options-builder').appendChild(div);
+        }
+
+        async function saveFlow() {
+            const id = document.getElementById('flow-id').value;
+            const triggers = document.getElementById('flow-triggers').value;
+            const message = document.getElementById('flow-message').value;
+
+            if (!id) return alert('Por favor, informe o ID do fluxo.');
+
+            const options = {};
+            document.querySelectorAll('.option-row').forEach(row => {
+                const key = row.querySelector('.opt-key').value;
+                const type = row.querySelector('.opt-type').value;
+                const value = row.querySelector('.opt-value').value;
+                if (key) options[key] = { type, value, nextFlow: type === 'flow' ? value : null };
+            });
+
+            try {
+                const res = await fetch('/api/flows', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, triggers, message, options })
+                });
+
+                if (res.ok) {
+                    alert('Fluxo salvo com sucesso no Oracle!');
+                    loadFlows();
+                } else {
+                    const error = await res.json();
+                    alert('Erro ao salvar no Banco: ' + (error.error || 'Erro desconhecido'));
+                }
+            } catch (err) {
+                alert('Falha na comunicação com o servidor: ' + err.message);
+            }
+        }
+
+        async function deleteFlow() {
+            const id = document.getElementById('flow-id').value;
+            if (!confirm(`Deseja excluir o fluxo ${id}?`)) return;
+            const res = await fetch(`/api/flows/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                alert('Fluxo excluído!');
+                prepareNewFlow();
+                loadFlows();
+            }
+        }
+
+        // --- Dizimistas Logic ---
+        let allDizimistas = [];
+
+        function toggleDizimistas() {
+            const overlay = document.getElementById('dizimistas-overlay');
+            overlay.classList.toggle('hidden');
+            if (!overlay.classList.contains('hidden')) {
+                loadDizimistas();
+            }
+        }
+
+        async function loadDizimistas() {
+            const container = document.getElementById('dizimistas-list');
+            container.innerHTML = '<tr><td colspan="3" style="text-align: center;">Carregando...</td></tr>';
+
+            try {
+                const res = await fetch('/api/dizimistas');
+                const data = await res.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                if (!Array.isArray(data)) {
+                    throw new Error('O servidor não retornou uma lista válida.');
+                }
+
+                allDizimistas = data;
+                renderDizimistas(allDizimistas);
+            } catch (err) {
+                container.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--danger);">Erro: ${err.message}</td></tr>`;
+            }
+        }
+
+        function renderDizimistas(list) {
+            const container = document.getElementById('dizimistas-list');
+            container.innerHTML = '';
+
+            if (!Array.isArray(list)) return;
+
+            list.forEach(d => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${d.NOME}</td>
+                    <td>${d.TELEFONE}</td>
+                    <td class="action-cell">
+                        <button class="btn btn-primary" style="padding: 5px 12px; font-size: 0.8rem;" onclick="startChatFromDizimista('${d.TELEFONE}', '${d.NOME}')">💬 Conversar</button>
+                    </td>
+                `;
+                container.appendChild(tr);
+            });
+        }
+
+        function filterDizimistas() {
+            const term = document.getElementById('dizimista-search').value.toLowerCase();
+            const filtered = allDizimistas.filter(d => d.NOME.toLowerCase().includes(term));
+            renderDizimistas(filtered);
+        }
+
+        function startChatFromDizimista(phone, name) {
+            const cleanPhone = phone.replace(/\D/g, '');
+            // Formata se não tiver DDI
+            const formatted = cleanPhone.length <= 11 ? '55' + cleanPhone : cleanPhone;
+
+            toggleDizimistas();
+            selectChat(null, name);
+            socket.emit('send-message', { number: formatted, message: 'Olá!' });
+        }
+
+        // --- DB Status Polling ---
+        async function checkDbStatus() {
+            try {
+                const res = await fetch('/api/db-status');
+                const data = await res.json();
+                const dot = document.getElementById('db-status-dot');
+                if (data.connected) {
+                    dot.classList.add('online');
+                } else {
+                    dot.classList.remove('online');
+                }
+            } catch (e) {
+                console.error('DB Status Check failed');
+            }
+        }
+
+        setInterval(checkDbStatus, 10000);
+        checkDbStatus();
+    </script>
+</body>
+
+</html>

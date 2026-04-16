@@ -1,0 +1,30 @@
+# Node modules
+node_modules/
+
+# WhatsApp Web Session & Cache
+.wwebjs_auth/
+.wwebjs_cache/
+chrome_profile/
+
+# Database & Oracle Connectivity (Wallet)
+DriveOracle/
+chatbot.db
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Environment & Logs
+.env
+*.log
+
+# SSH & Cloud Configs
+SSHVM/
+
+# OS files
+.DS_Store
+Thumbs.db

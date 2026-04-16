@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Bot Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #25D366;
+            --secondary: #128C7E;
+            --dark: #0f172a;
+            --glass: rgba(255, 255, 255, 0.05);
+            --text-main: #f8fafc;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background: radial-gradient(circle at top right, #1e293b, #0f172a);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 8px;
+            background: linear-gradient(45deg, #25D366, #34d399);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+        }
+
+        p.subtitle {
+            text-align: center;
+            color: #94a3b8;
+            margin-bottom: 32px;
+            font-size: 0.9rem;
+        }
+
+        .status-card {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            border-left: 4px solid var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #64748b;
+            margin-right: 10px;
+            display: inline-block;
+        }
+
+        .status-dot.active {
+            background: var(--primary);
+            box-shadow: 0 0 10px var(--primary);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+            color: #cbd5e1;
+            font-weight: 500;
+        }
+
+        input, textarea {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 12px 16px;
+            color: white;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+        }
+
+        button {
+            width: 100%;
+            background: linear-gradient(45deg, var(--secondary), var(--primary));
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(37, 211, 102, 0.3);
+        }
+
+        button:disabled {
+            filter: grayscale(1);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .message-status {
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.9rem;
+            min-height: 20px;
+        }
+
+        #log-area {
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 0.75rem;
+            background: black;
+            padding: 10px;
+            border-radius: 8px;
+            color: #4ade80;
+            height: 100px;
+            overflow-y: auto;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Antigravity WA</h1>
+        <p class="subtitle">Controle de Automação WhatsApp Web</p>
+
+        <div class="status-card">
+            <div>
+                <span id="status-dot" class="status-dot"></span>
+                <span id="status-text">Conectando ao WhatsApp...</span>
+            </div>
+            <div>
+                <button id="force-btn" onclick="forceConnect()" style="width: auto; padding: 5px 10px; font-size: 0.7rem; margin: 0;">Já estou logado</button>
+                <button id="restart-btn" onclick="restartBot()" style="width: auto; padding: 5px 10px; font-size: 0.7rem; margin: 0; background: #334155;">Reiniciar</button>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Número do WhatsApp (com código do país e DDD)</label>
+            <input type="text" id="phone" placeholder="Ex: 5511999999999">
+        </div>
+
+        <div class="form-group">
+            <label>Mensagem</label>
+            <textarea id="message" rows="4" placeholder="Digite sua mensagem aqui..."></textarea>
+        </div>
+
+        <button id="send-btn" onclick="sendMessage()" disabled>Enviar Mensagem</button>
+
+        <div id="msg-status" class="message-status"></div>
+
+        <div id="log-area"></div>
+    </div>
+
+    <script>
+        const statusText = document.getElementById('status-text');
+        const statusDot = document.getElementById('status-dot');
+        const sendBtn = document.getElementById('send-btn');
+        const msgStatus = document.getElementById('msg-status');
+
+        function updateStatus() {
+            fetch('/status')
+                .then(res => res.json())
+                .then(data => {
+                    statusText.innerText = data.status;
+                    const statusCard = document.querySelector('.status-card');
+                    
+                    if (data.status.startsWith("ERRO")) {
+                        statusCard.style.borderLeftColor = "#ef4444";
+                        statusText.style.color = "#fed7d7";
+                    } else {
+                        statusCard.style.borderLeftColor = data.connected ? "var(--primary)" : "#64748b";
+                        statusText.style.color = "white";
+                    }
+
+                    if (data.connected) {
+                        statusDot.classList.add('active');
+                        sendBtn.disabled = false;
+                    } else {
+                        statusDot.classList.remove('active');
+                        sendBtn.disabled = true;
+                    }
+                });
+        }
+
+        // Atualiza status a cada 3 segundos
+        setInterval(updateStatus, 3000);
+        updateStatus();
+
+        function forceConnect() {
+            fetch('/force_connect', { method: 'POST' })
+                .then(() => updateStatus());
+        }
+
+        function restartBot() {
+            msgStatus.innerText = "⏳ Reiniciando motor...";
+            fetch('/restart', { method: 'POST' })
+                .then(() => {
+                    setTimeout(updateStatus, 3000);
+                });
+        }
+
+        function sendMessage() {
+            const phone = document.getElementById('phone').value;
+            const message = document.getElementById('message').value;
+
+            if (!phone || !message) {
+                msgStatus.innerText = "⚠️ Preencha todos os campos.";
+                return;
+            }
+
+            msgStatus.innerText = "⏳ Enviando...";
+            sendBtn.disabled = true;
+
+            fetch('/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone, message })
+            })
+            .then(res => res.json())
+            .then(data => {
+                msgStatus.innerText = data.success ? "✅ " + data.message : "❌ " + data.message;
+                sendBtn.disabled = false;
+                if (data.success) {
+                    document.getElementById('message').value = '';
+                }
+            })
+            .catch(err => {
+                msgStatus.innerText = "❌ Erro na conexão com o servidor.";
+                sendBtn.disabled = false;
+            });
+        }
+    </script>
+</body>
+</html>
