@@ -389,8 +389,8 @@
         <div style="background: var(--sidebar-bg); padding: 40px; border-radius: 20px; text-align: center; border: 1px solid var(--border-color); box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
             <div style="font-size: 3.5rem; margin-bottom: 20px;">🤖</div>
             <h2 style="margin-bottom: 10px; color: var(--text-primary);">Conectar ao Zap</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 30px; max-width: 320px; line-height: 1.5;">O bot está aguardando o início da conexão. Clique no botão abaixo para gerar o QR Code.</p>
-            <button class="btn btn-primary" onclick="startWhatsApp()" style="padding: 15px 45px; font-size: 1.1rem; box-shadow: 0 5px 15px rgba(0, 168, 132, 0.4);">🚀 Iniciar Agora</button>
+            <button class="btn btn-primary" id="init-btn" onclick="startWhatsApp()" style="padding: 15px 45px; font-size: 1.1rem; box-shadow: 0 5px 15px rgba(0, 168, 132, 0.4);">🚀 Iniciar Agora</button>
+            <p id="init-status" style="color: var(--primary-accent); margin-top: 15px; font-size: 0.9rem; font-weight: 600;"></p>
         </div>
     </div>
 
@@ -567,16 +567,42 @@
             clearTimeout(connectionTimeout);
             if (!isReady) {
                 document.getElementById('init-overlay').classList.remove('hidden');
+                document.getElementById('init-status').innerText = '';
+                const btn = document.getElementById('init-btn');
+                btn.innerText = '🚀 Iniciar Agora';
+                btn.disabled = false;
             }
+        });
+
+        socket.on('message', (msg) => {
+            console.log('Server Message:', msg);
+            const statusEl = document.getElementById('init-status');
+            if (statusEl) statusEl.innerText = msg;
+            
+            // Se receber mensagem de erro/status, garante que o overlay está visível se não estiver pronto
+            if (!isReady) {
+                document.getElementById('init-overlay').classList.remove('hidden');
+            }
+        });
+
+        socket.on('connect_error', (err) => {
+            console.error('Socket Connection Error:', err);
+            const statusEl = document.getElementById('init-status');
+            if (statusEl) {
+                statusEl.style.color = 'var(--danger)';
+                statusEl.innerText = 'Erro de conexão/autenticação: ' + err.message;
+            }
+            document.getElementById('init-overlay').classList.remove('hidden');
         });
 
         function startWhatsApp() {
             socket.emit('init-whatsapp');
-            const btn = document.querySelector('#init-overlay button');
+            const btn = document.getElementById('init-btn');
             if (btn) {
                 btn.innerText = 'Inicializando...';
                 btn.disabled = true;
             }
+            document.getElementById('init-status').innerText = 'Solicitando abertura do navegador...';
         }
 
         function closeQr() {

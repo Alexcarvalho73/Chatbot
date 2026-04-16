@@ -193,6 +193,7 @@ async function initialize() {
 initialize();
 
 let isReady = false;
+let isInitializing = false;
 let lastQr = null;
 
 // Gerenciamento de Estados
@@ -467,6 +468,7 @@ const client = new Client({
 client.on('qr', (qr) => {
     lastQr = qr;
     isReady = false;
+    isInitializing = false;
     // Escaneie no terminal também se necessário
     qrcode.generate(qr, { small: true });
     // Envia o QR code para o frontend
@@ -476,6 +478,7 @@ client.on('qr', (qr) => {
 
 client.on('ready', () => {
     isReady = true;
+    isInitializing = false;
     lastQr = null;
     console.log('Client is ready!');
     io.emit('ready', 'WhatsApp está pronto!');
@@ -483,12 +486,14 @@ client.on('ready', () => {
 
 client.on('authenticated', () => {
     isReady = true;
+    isInitializing = false;
     console.log('AUTHENTICATED');
     io.emit('authenticated', 'Autenticado com sucesso!');
 });
 
 client.on('auth_failure', msg => {
     console.error('AUTHENTICATION FAILURE', msg);
+    isInitializing = false;
     io.emit('message', 'Falha na autenticação: ' + msg);
 });
 
@@ -675,10 +680,23 @@ io.on('connection', (socket) => {
     console.log('A user connected');
 
     socket.on('init-whatsapp', () => {
+        if (isReady) {
+            socket.emit('ready', 'Já está conectado!');
+            return;
+        }
+        if (isInitializing) {
+            socket.emit('message', 'WhatsApp já está inicializando... aguarde.');
+            return;
+        }
+
         console.log('[WWEB] Inicialização manual solicitada via painel.');
+        isInitializing = true;
+        socket.emit('message', 'Iniciando navegador e WhatsApp... Isso pode levar alguns segundos.');
+        
         client.initialize().catch(err => {
             console.error('Erro ao inicializar WhatsApp:', err);
-            socket.emit('message', 'Erro ao iniciar WhatsApp.');
+            isInitializing = false;
+            socket.emit('message', 'Erro ao iniciar WhatsApp: ' + err.message);
         });
     });
 
@@ -687,6 +705,8 @@ io.on('connection', (socket) => {
         socket.emit('ready', 'WhatsApp já está conectado!');
     } else if (lastQr) {
         socket.emit('qr', lastQr);
+    } else if (isInitializing) {
+        socket.emit('message', 'WhatsApp está inicializando...');
     } else {
         socket.emit('whatsapp-idle');
     }
@@ -760,7 +780,11 @@ io.on('connection', (socket) => {
 const sessionPath = path.join(__dirname, '.wwebjs_auth', 'session-main-session');
 if (fs.existsSync(sessionPath)) {
     console.log('[WWEB] Sessão salva detectada. Inicializando automaticamente...');
-    client.initialize().catch(err => console.error('Erro na inicialização automática:', err));
+    isInitializing = true;
+    client.initialize().catch(err => {
+        console.error('Erro na inicialização automática:', err);
+        isInitializing = false;
+    });
 } else {
     console.log('[WWEB] Nenhuma sessão encontrada. Aguardando comando manual do usuário.');
 }
