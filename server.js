@@ -4,6 +4,7 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 const oracledb = require('oracledb');
 const cookieParser = require('cookie-parser');
 
@@ -668,11 +669,21 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
     console.log('A user connected');
 
+    socket.on('init-whatsapp', () => {
+        console.log('[WWEB] Inicialização manual solicitada via painel.');
+        client.initialize().catch(err => {
+            console.error('Erro ao inicializar WhatsApp:', err);
+            socket.emit('message', 'Erro ao iniciar WhatsApp.');
+        });
+    });
+
     // Enviar estado atual para o novo cliente
     if (isReady) {
         socket.emit('ready', 'WhatsApp já está conectado!');
     } else if (lastQr) {
         socket.emit('qr', lastQr);
+    } else {
+        socket.emit('whatsapp-idle');
     }
 
     socket.on('get-chats', async () => {
@@ -740,7 +751,14 @@ io.on('connection', (socket) => {
     });
 });
 
-client.initialize();
+// Inicialização Inteligente
+const sessionPath = path.join(__dirname, '.wwebjs_auth', 'session-main-session');
+if (fs.existsSync(sessionPath)) {
+    console.log('[WWEB] Sessão salva detectada. Inicializando automaticamente...');
+    client.initialize().catch(err => console.error('Erro na inicialização automática:', err));
+} else {
+    console.log('[WWEB] Nenhuma sessão encontrada. Aguardando comando manual do usuário.');
+}
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
