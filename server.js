@@ -19,15 +19,14 @@ const authMiddleware = (req, res, next) => {
     const token = req.query.token || req.cookies['chatbot_auth'];
 
     if (token === ACCESS_TOKEN) {
-        if (req.query.token) {
-            // Salva o cookie por 30 dias para não precisar do token novamente
+        // Se o token veio na URL, salva no cookie pra durar 30 dias
+        if (req.query.token && !req.cookies['chatbot_auth']) {
             res.cookie('chatbot_auth', ACCESS_TOKEN, { 
                 maxAge: 86400000 * 30, 
                 httpOnly: true, 
-                path: '/chatbot/' 
+                path: '/' 
             });
-            // Redireciona para a URL limpa
-            return res.redirect('/chatbot/');
+            console.log('[AUTH] Novo cookie de acesso gerado via token URL');
         }
         return next();
     }
