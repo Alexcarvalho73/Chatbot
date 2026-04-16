@@ -519,11 +519,15 @@ client.on('message_create', async msg => {
         // --- 0. COMANDOS GLOBAIS DE NAVEGAÇÃO ---
         if (text === 'menu' || text === 'voltar') {
             console.log(`[NAV] Usuário ${phone} solicitou retorno ao menu principal.`);
-            delete userStates[phone];
+            const currentState = userStates[phone];
             const mainFlow = chatFlows['main_menu'];
             if (mainFlow) {
                 await msg.reply(mainFlow.message);
-                userStates[phone] = { flowId: 'main_menu' };
+                userStates[phone] = { 
+                    flowId: 'main_menu',
+                    idDizimista: currentState ? currentState.idDizimista : null,
+                    nomeDizimista: currentState ? currentState.nomeDizimista : null
+                };
             }
             return;
         }
@@ -567,6 +571,16 @@ client.on('message_create', async msg => {
         }
 
         // Se já existe um estado (Usuário já identificado)
+        // Garante que a identidade está presente
+        if (!state.idDizimista || !state.nomeDizimista) {
+            console.log(`[STATE] Recuperando identidade para ${phone}...`);
+            const userData = await internalFunctions.buscarDizimistaPorTelefone(phone);
+            if (userData) {
+                state.idDizimista = userData.id;
+                state.nomeDizimista = userData.nome;
+            }
+        }
+
         const currentFlow = chatFlows[state.flowId];
         
         if (currentFlow && currentFlow.options && currentFlow.options[text]) {
@@ -595,11 +609,14 @@ client.on('message_create', async msg => {
             console.log(`[STATE] Usuário ${phone} selecionando missa: ${text}`);
 
             if (text === '0') {
-                delete userStates[phone];
                 const mainFlow = chatFlows['main_menu'];
                 if (mainFlow) {
                     await msg.reply(mainFlow.message);
-                    userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista };
+                    userStates[phone] = { 
+                        flowId: 'main_menu', 
+                        idDizimista: state.idDizimista, 
+                        nomeDizimista: state.nomeDizimista 
+                    };
                 }
                 return;
             }
@@ -652,12 +669,15 @@ client.on('message_create', async msg => {
                 await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
             }
         } else {
-            // Fallback para qualquer outra coisa: volta ao menu principal
-            delete userStates[phone];
+            // Fallback para qualquer outra coisa: volta ao menu principal preservando ID
             const mainFlow = chatFlows['main_menu'];
             if (mainFlow) {
                 await msg.reply(mainFlow.message);
-                userStates[phone] = { flowId: 'main_menu' };
+                userStates[phone] = { 
+                    flowId: 'main_menu',
+                    idDizimista: state.idDizimista,
+                    nomeDizimista: state.nomeDizimista
+                };
             }
         }
     }
