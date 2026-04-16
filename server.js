@@ -657,9 +657,11 @@ client.on('message_create', async msg => {
 
 // Eventos do Socket.io do Frontend
 io.use((socket, next) => {
-    // Verifica cookie no handshake do socket
+    // Verifica token no handshake ou cookie
+    const token = socket.handshake.auth.token || socket.handshake.query.token;
     const cookie = socket.handshake.headers.cookie;
-    if (cookie && cookie.includes(`chatbot_auth=${ACCESS_TOKEN}`)) {
+
+    if (token === ACCESS_TOKEN || (cookie && cookie.includes(`chatbot_auth=${ACCESS_TOKEN}`))) {
         return next();
     }
     console.log('[Socket] Bloqueado: Conexão sem autenticação válida.');

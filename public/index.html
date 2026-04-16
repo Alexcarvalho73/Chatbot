@@ -521,9 +521,13 @@
     </div>
 
     <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+
         const socket = io({ 
             path: '/chatbot/socket.io',
-            transports: ['websocket', 'polling'] 
+            transports: ['websocket', 'polling'],
+            auth: { token: token }
         });
 
         let activeChatId = null;
