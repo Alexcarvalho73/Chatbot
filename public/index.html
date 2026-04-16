@@ -415,6 +415,11 @@
 
             <div class="chat-list" id="chat-list-container">
             </div>
+
+            <div style="padding: 10px; border-top: 1px solid var(--border-color); font-size: 0.7rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                <div id="socket-status-dot" style="width: 6px; height: 6px; border-radius: 50%; background: #ea0038;"></div>
+                <span id="socket-status-text">Desconectado do Servidor</span>
+            </div>
         </div>
 
         <!-- Main Area -->
@@ -427,8 +432,9 @@
             </div>
 
             <div id="chat-window" class="hidden" style="height: 100%; display: flex; flex-direction: column;">
-                <div class="chat-header">
+                <div class="chat-header" style="justify-content: space-between;">
                     <h4 id="active-chat-name">Nome do Contato</h4>
+                    <span style="font-size: 0.7rem; color: var(--text-secondary); opacity: 0.5;">v1.3.0 (16/04/26)</span>
                 </div>
                 <div class="messages" id="messages-container"></div>
                 <div class="chat-input">
@@ -527,7 +533,21 @@
         const socket = io({ 
             path: '/chatbot/socket.io',
             transports: ['websocket', 'polling'],
-            auth: { token: token }
+            auth: { token: token },
+            reconnectionAttempts: 5,
+            timeout: 10000
+        });
+
+        socket.on('connect', () => {
+            console.log('Socket Connected!');
+            document.getElementById('socket-status-dot').style.background = '#00a884';
+            document.getElementById('socket-status-text').innerText = 'Conectado ao Servidor';
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Socket Disconnected!');
+            document.getElementById('socket-status-dot').style.background = '#ea0038';
+            document.getElementById('socket-status-text').innerText = 'Desconectado do Servidor';
         });
 
         let activeChatId = null;
