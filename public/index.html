@@ -521,12 +521,26 @@
     </div>
 
     <script>
-        const socket = io({ path: '/chatbot/socket.io' });
+        const socket = io({ 
+            path: '/chatbot/socket.io',
+            transports: ['websocket', 'polling'] 
+        });
+
         let activeChatId = null;
         let qrcodeInstance = null;
-        let currentOptions = {};
+        let isReady = false;
+
+        // Timeout de segurança: se em 5 segundos não estiver pronto nem com QR, mostra o botão
+        let connectionTimeout = setTimeout(() => {
+            if (!isReady && !qrcodeInstance) {
+                console.log('Timeout de conexão. Exibindo botão de inicialização.');
+                document.getElementById('init-overlay').classList.remove('hidden');
+            }
+        }, 5000);
 
         socket.on('qr', (qr) => {
+            clearTimeout(connectionTimeout);
+            isReady = false;
             document.getElementById('init-overlay').classList.add('hidden');
             document.getElementById('qr-overlay').classList.remove('hidden');
             if (qrcodeInstance) {
@@ -538,21 +552,27 @@
         });
 
         socket.on('ready', () => {
+            clearTimeout(connectionTimeout);
+            isReady = true;
             document.getElementById('init-overlay').classList.add('hidden');
             document.getElementById('qr-overlay').classList.add('hidden');
             socket.emit('get-chats');
         });
 
         socket.on('whatsapp-idle', () => {
-            document.getElementById('init-overlay').classList.remove('hidden');
+            clearTimeout(connectionTimeout);
+            if (!isReady) {
+                document.getElementById('init-overlay').classList.remove('hidden');
+            }
         });
 
         function startWhatsApp() {
             socket.emit('init-whatsapp');
-            // Opcional: mostrar carregando ou mudar texto do botão
             const btn = document.querySelector('#init-overlay button');
-            btn.innerText = 'Inicializando...';
-            btn.disabled = true;
+            if (btn) {
+                btn.innerText = 'Inicializando...';
+                btn.disabled = true;
+            }
         }
 
         function closeQr() {
