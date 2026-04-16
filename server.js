@@ -711,9 +711,21 @@ io.on('connection', (socket) => {
 
         console.log('[WWEB] Inicialização manual solicitada via painel.');
         isInitializing = true;
-        socket.emit('message', 'Iniciando navegador e WhatsApp... Isso pode levar alguns segundos.');
+        socket.emit('message', 'Iniciando navegador... Isso pode levar até 1 minuto em servidores lentos.');
         
-        client.initialize().catch(err => {
+        // Timeout de emergência: 2 minutos
+        const initTimeout = setTimeout(() => {
+            if (isInitializing) {
+                isInitializing = false;
+                console.log('[WWEB] TIMEOUT CRÍTICO: Browser não respondeu.');
+                socket.emit('message', 'Erro: O navegador demorou muito para responder. Tente novamente em instantes.');
+            }
+        }, 120000);
+
+        client.initialize().then(() => {
+            console.log('[WWEB] client.initialize() promise resolved');
+        }).catch(err => {
+            clearTimeout(initTimeout);
             console.error('Erro ao inicializar WhatsApp:', err);
             isInitializing = false;
             socket.emit('message', 'Erro ao iniciar WhatsApp: ' + err.message);

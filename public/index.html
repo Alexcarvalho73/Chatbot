@@ -598,11 +598,15 @@
         function startWhatsApp() {
             socket.emit('init-whatsapp');
             const btn = document.getElementById('init-btn');
+            const statusEl = document.getElementById('init-status');
             if (btn) {
                 btn.innerText = 'Inicializando...';
                 btn.disabled = true;
             }
-            document.getElementById('init-status').innerText = 'Solicitando abertura do navegador...';
+            if (statusEl) {
+                statusEl.style.color = 'var(--primary-accent)';
+                statusEl.innerText = 'Solicitando abertura do navegador...';
+            }
         }
 
         function closeQr() {
