@@ -81,6 +81,36 @@ process.env.TNS_ADMIN = oracleConfig.walletLocation;
 // Cache local de mensagens para mitigar bugs do fetchMessages do whatsapp-web.js
 const messageCache = {};
 
+// Cache de Dizimistas (Telefone -> Nome) por 5 minutos para evitar overload no BD do 'get-chats'
+let dizimistasContactCache = null;
+let lastDizimistasCacheTime = 0;
+
+async function getDizimistasCache() {
+    if (dizimistasContactCache && (Date.now() - lastDizimistasCacheTime) < 5 * 60 * 1000) {
+        return dizimistasContactCache;
+    }
+    let conn;
+    try {
+        conn = await getOracleConnection();
+        const res = await conn.execute(`SELECT TELEFONE, APELIDO, NOME FROM DIZIMISTAS WHERE TELEFONE IS NOT NULL AND STATUS = 1`);
+        const map = {};
+        for (const r of res.rows) {
+            if (!r.TELEFONE) continue;
+            let cleanPhone = r.TELEFONE.replace(/\D/g, '');
+            if (cleanPhone.length >= 10 && cleanPhone.length <= 11) cleanPhone = '55' + cleanPhone;
+            map[cleanPhone] = r.APELIDO || r.NOME;
+        }
+        dizimistasContactCache = map;
+        lastDizimistasCacheTime = Date.now();
+        return map;
+    } catch (err) {
+        console.error("Erro atualizar cache de contatos:", err);
+        return dizimistasContactCache || {};
+    } finally {
+        if (conn) await conn.close();
+    }
+}
+
 async function getOracleConnection() {
     try {
         // Define TNS_ADMIN para localizar tnsnames.ora e sqlnet.ora na Wallet
@@ -938,12 +968,20 @@ io.on('connection', (socket) => {
         if (!isReady) return;
         try {
             const chats = await client.getChats();
-            const chatData = chats.slice(0, 20).map(c => ({
-                id: c.id._serialized,
-                name: c.name,
-                unreadCount: c.unreadCount,
-                timestamp: c.timestamp
-            }));
+            const dbContacts = await getDizimistasCache();
+
+            const chatData = chats.slice(0, 20).map(c => {
+                const phoneOnly = c.id.user || '';
+                const formatName = dbContacts[phoneOnly] 
+                                    ? `[D] ${dbContacts[phoneOnly]}` 
+                                    : (c.name || phoneOnly || 'Desconhecido');
+                return {
+                    id: c.id._serialized,
+                    name: formatName,
+                    unreadCount: c.unreadCount,
+                    timestamp: c.timestamp
+                };
+            });
             socket.emit('chats', chatData);
         } catch (err) {
             console.error('Error fetching chats:', err);
