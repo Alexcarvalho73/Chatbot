@@ -224,13 +224,14 @@ const internalFunctions = {
         try {
             conn = await getOracleConnection();
             const resDiz = await conn.execute(`
-                SELECT ID_DIZIMISTA, NOME FROM DIZIMISTAS 
+                SELECT ID_DIZIMISTA, NOME, APELIDO FROM DIZIMISTAS 
                 WHERE REGEXP_REPLACE(TELEFONE, '[^0-9]', '') LIKE :phone
             `, { phone: '%' + cleanPhone });
 
             if (resDiz.rows.length > 0) {
-                console.log(`[ID] Dizimista localizado: ${resDiz.rows[0].NOME} (ID: ${resDiz.rows[0].ID_DIZIMISTA})`);
-                return { id: resDiz.rows[0].ID_DIZIMISTA, nome: resDiz.rows[0].NOME };
+                const r = resDiz.rows[0];
+                console.log(`[ID] Dizimista localizado: ${r.NOME} (ID: ${r.ID_DIZIMISTA})`);
+                return { id: r.ID_DIZIMISTA, nome: r.NOME, apelido: r.APELIDO || r.NOME };
             }
             console.log(`[ID] Nenhum dizimista encontrado para o telefone: ${cleanPhone}`);
             return null;
@@ -269,14 +270,10 @@ const internalFunctions = {
         } catch (err) {
             console.error('Erro listarMissas:', err);
             return "Erro ao buscar missas. Tente novamente mais tarde.";
-        } finally {
-            if (conn) await conn.close();
-        }
-    },
-    fluxoServir: async (msg, contact, userData) => {
+       fluxoServir: async (msg, contact, userData, pMonthOffset = 0) => {
         const phone = contact.number;
         const idDizimista = userData.id;
-        const nomeDizimista = userData.nome;
+        const nomeDizimista = userData.apelido || userData.nome;
 
         let conn;
         try {
@@ -298,29 +295,36 @@ const internalFunctions = {
                 SELECT m.ID_MISSA, TO_CHAR(TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, m.HORA, m.COMUNIDADE, 
                        mp.QUANTIDADE_SERVOS, mp.ID_PASTORAL, p.NOME as PASTORAL_NOME,
                        (SELECT COUNT(*) FROM MISSA_SERVOS ms WHERE ms.ID_MISSA = m.ID_MISSA AND ms.ID_PASTORAL = mp.ID_PASTORAL) as ATUAIS,
-                       (SELECT COUNT(*) FROM MISSA_SERVOS ms WHERE ms.ID_MISSA = m.ID_MISSA AND ms.ID_DIZIMISTA = :idDizimista) as JA_INSCRITO
+                       (SELECT COUNT(*) FROM MISSA_SERVOS ms WHERE ms.ID_MISSA = m.ID_MISSA AND ms.ID_DIZIMISTA = :idDizimista) as JA_INSCRITO,
+                       (SELECT LISTAGG(NVL(d.APELIDO, d.NOME), ', ') WITHIN GROUP (ORDER BY NVL(d.APELIDO, d.NOME)) 
+                        FROM MISSA_SERVOS ms2 JOIN DIZIMISTAS d ON ms2.ID_DIZIMISTA = d.ID_DIZIMISTA 
+                        WHERE ms2.ID_MISSA = m.ID_MISSA AND ms2.ID_PASTORAL = mp.ID_PASTORAL) as SERVOS_ATUAIS
                 FROM MISSAS m
-                JOIN MISSA_PASTORAL mp ON m.ID_MISSA = mp.ID_MISSA
+                JOIN MISSA_PASTORAL mp ON m.ID_MISSA = m.ID_MISSA
                 JOIN PASTORAIS p ON mp.ID_PASTORAL = p.ID_PASTORAL
                 WHERE mp.ID_PASTORAL IN (${idsPastoral.join(',')})
                 AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= TRUNC(SYSDATE)
+                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), :monthOffset)
+                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') <= LAST_DAY(ADD_MONTHS(TRUNC(SYSDATE, 'MM'), :monthOffset))
                 AND m.STATUS = 1
                 ORDER BY m.DATA_MISSA, m.HORA
-            `, { idDizimista });
+            `, { idDizimista, monthOffset: pMonthOffset });
 
             if (resMissas.rows.length === 0) {
-                return `Olá ${nomeDizimista}! Não encontrei missas agendadas para as suas pastorais.`;
+                return `Olá ${nomeDizimista}! Não encontrei missas agendadas para as suas pastorais neste período.`;
             }
 
             // Guardar no estado para a seleção
             userStates[phone] = { 
                 flowId: 'servir_selecao', 
                 idDizimista, 
-                nomeDizimista,
+                nomeDizimista: userData.nome,
+                apelidoDizimista: userData.apelido,
+                monthOffset: pMonthOffset,
                 availableMasses: resMissas.rows 
             };
 
-            console.log(`[FLOW] Oferecendo ${resMissas.rows.length} missas para ${nomeDizimista}`);
+            console.log(`[FLOW] Oferecendo ${resMissas.rows.length} missas para ${nomeDizimista} (Mês Offset: ${pMonthOffset})`);
 
             let response = `Olá *${nomeDizimista}*! 👋\nEscolha em qual missa você deseja servir:\n\n`;
             resMissas.rows.forEach((r, idx) => {
@@ -331,9 +335,15 @@ const internalFunctions = {
                     status = "❌ _(Vagas Esgotadas)_";
                 }
                 
-                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*\n${status}\n\n`;
+                let servosStr = "";
+                if (r.SERVOS_ATUAIS) {
+                    const list = r.SERVOS_ATUAIS.split(', ').map(n => n.trim() === nomeDizimista.trim() ? `*${n.trim()}*` : n.trim());
+                    servosStr = `\n👥 Servindo: ${list.join(', ')}`;
+                }
+
+                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*${servosStr}\n${status}\n\n`;
             });
-            response += "*0* - Voltar ao Menu Anterior\n\nResponda com o *NÚMERO* da opção desejada.";
+            response += "*0* - Voltar ao Menu Anterior\n*99* - Exibe missas do próximo mês\n\nResponda com o *NÚMERO* da opção desejada.";
             return response;
 
         } catch (err) {
@@ -532,7 +542,8 @@ client.on('message_create', async msg => {
                 userStates[phone] = { 
                     flowId: 'main_menu',
                     idDizimista: currentState ? currentState.idDizimista : null,
-                    nomeDizimista: currentState ? currentState.nomeDizimista : null
+                    nomeDizimista: currentState ? currentState.nomeDizimista : null,
+                    apelidoDizimista: currentState ? currentState.apelidoDizimista : null
                 };
             }
             return;
@@ -568,7 +579,8 @@ client.on('message_create', async msg => {
             userStates[phone] = { 
                 flowId: 'main_menu',
                 idDizimista: userData.id,
-                nomeDizimista: userData.nome
+                nomeDizimista: userData.nome,
+                apelidoDizimista: userData.apelido
             };
 
             await msg.reply(welcomeMsg);
@@ -584,6 +596,7 @@ client.on('message_create', async msg => {
             if (userData) {
                 state.idDizimista = userData.id;
                 state.nomeDizimista = userData.nome;
+                state.apelidoDizimista = userData.apelido;
             }
         }
 
@@ -604,7 +617,7 @@ client.on('message_create', async msg => {
             } else if (option.type === 'function') {
                 const func = internalFunctions[option.value];
                 if (func) {
-                    const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista });
+                    const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista });
                     await msg.reply(result);
                 } else {
                     console.error(`Função ${option.value} não encontrada.`);
@@ -621,9 +634,18 @@ client.on('message_create', async msg => {
                     userStates[phone] = { 
                         flowId: 'main_menu', 
                         idDizimista: state.idDizimista, 
-                        nomeDizimista: state.nomeDizimista 
+                        nomeDizimista: state.nomeDizimista,
+                        apelidoDizimista: state.apelidoDizimista 
                     };
                 }
+                return;
+            }
+
+            if (text === '99') {
+                const func = internalFunctions.fluxoServir;
+                const newOffset = (state.monthOffset || 0) + 1;
+                const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, newOffset);
+                await msg.reply(result);
                 return;
             }
 
@@ -682,7 +704,8 @@ client.on('message_create', async msg => {
                 userStates[phone] = { 
                     flowId: 'main_menu',
                     idDizimista: state.idDizimista,
-                    nomeDizimista: state.nomeDizimista
+                    nomeDizimista: state.nomeDizimista,
+                    apelidoDizimista: state.apelidoDizimista
                 };
             }
         }
