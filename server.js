@@ -941,7 +941,7 @@ io.on('connection', (socket) => {
             const chat = await client.getChatById(chatId);
             const messages = await chat.fetchMessages({ limit: 20 });
             const msgData = messages.map(m => ({
-                body: m.body,
+                body: m.body || (m.hasMedia ? '[Mídia/Imagem/Áudio]' : '[Mensagem de Sistema]'),
                 fromMe: m.fromMe,
                 timestamp: new Date(m.timestamp * 1000).toLocaleTimeString()
             }));

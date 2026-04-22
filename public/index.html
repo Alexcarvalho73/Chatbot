@@ -690,7 +690,14 @@
             const container = document.getElementById('messages-container');
             const div = document.createElement('div');
             div.className = `msg-bubble ${msg.fromMe ? 'msg-out' : 'msg-in'}`;
-            div.innerHTML = `${msg.body}<span class="time">${msg.timestamp}</span>`;
+            
+            let htmlBody = msg.body || '';
+            // Protege caracteres HTML e decodifica \n e *negritos* do Whatsapp:
+            htmlBody = htmlBody.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            htmlBody = htmlBody.replace(/\n/g, '<br>');
+            htmlBody = htmlBody.replace(/\*(.*?)\*/g, '<b>$1</b>');
+
+            div.innerHTML = `${htmlBody}<span class="time">${msg.timestamp}</span>`;
             container.appendChild(div);
         }
 
