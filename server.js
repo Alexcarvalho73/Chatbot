@@ -16,20 +16,30 @@ const ACCESS_TOKEN = 'Alinne05@token';
 
 // Middleware de Autenticação
 const authMiddleware = (req, res, next) => {
+    console.log(`[AUTH] Path original recebido: ${req.path} | Query: ${JSON.stringify(req.query)} | URL: ${req.url}`);
+    
+    // Suporte para o token enviado na query ou no cookie
     const token = req.query.token || req.cookies['chatbot_auth'];
 
     if (token === ACCESS_TOKEN) {
-        // Se o token veio na URL, salva no cookie pra durar 30 dias
-        if (req.query.token && !req.cookies['chatbot_auth']) {
+        // Se o token veio na URL e está correto, gera o cookie
+        if (req.query.token) {
             res.cookie('chatbot_auth', ACCESS_TOKEN, { 
-                maxAge: 86400000 * 30, 
+                maxAge: 86400000 * 30, // 30 dias
                 httpOnly: true, 
                 path: '/' 
             });
-            console.log('[AUTH] Novo cookie de acesso gerado via token URL');
+            console.log('[AUTH] Token validado pela URL. Cookie gerado.');
+            
+            // Redireciona para limpar o token da URL e carregar o sistema com o cookie
+            return res.redirect('/chatbot/');
         }
+        
+        // Se a validação foi pelo cookie, deixa prosseguir normalmente
         return next();
     }
+
+    console.log('[AUTH] Falha: Token ou Cookie inválido/ausente.');
 
     // Se for uma requisição de API, retorna JSON
     if (req.path.startsWith('/api/')) {
