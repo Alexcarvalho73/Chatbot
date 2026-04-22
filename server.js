@@ -374,6 +374,57 @@ const internalFunctions = {
         } finally {
             if (conn) await conn.close();
         }
+    },
+    fluxoCancelarServir: async (msg, contact, userData, pMonthOffset = 0) => {
+        const phone = contact.number;
+        const idDizimista = userData.id;
+        const nomeDizimista = userData.apelido || userData.nome;
+
+        let conn;
+        try {
+            conn = await getOracleConnection();
+            
+            // Buscar Missas que o usuário está inscrito
+            const resMissas = await conn.execute(`
+                SELECT m.ID_MISSA, TO_CHAR(TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, m.HORA, m.COMUNIDADE, 
+                       ms.ID_PASTORAL, p.NOME as PASTORAL_NOME
+                FROM MISSA_SERVOS ms
+                JOIN MISSAS m ON ms.ID_MISSA = m.ID_MISSA
+                JOIN PASTORAIS p ON ms.ID_PASTORAL = p.ID_PASTORAL
+                WHERE ms.ID_DIZIMISTA = :idDizimista
+                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= TRUNC(SYSDATE)
+                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), :monthOffset)
+                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') <= LAST_DAY(ADD_MONTHS(TRUNC(SYSDATE, 'MM'), :monthOffset))
+                ORDER BY m.DATA_MISSA, m.HORA
+            `, { idDizimista, monthOffset: pMonthOffset });
+
+            if (resMissas.rows.length === 0) {
+                return `Olá ${nomeDizimista}! Não encontrei nenhuma missa em que você esteja escalado(a) neste período para cancelar.`;
+            }
+
+            // Guardar no estado para a seleção de cancelamento
+            userStates[phone] = { 
+                flowId: 'cancelar_selecao', 
+                idDizimista, 
+                nomeDizimista: userData.nome,
+                apelidoDizimista: userData.apelido,
+                monthOffset: pMonthOffset,
+                availableMasses: resMissas.rows 
+            };
+
+            let response = `Olá *${nomeDizimista}*! 👋\nVocê está escalado(a) nas seguintes missas.\nEscolha o número da missa que deseja *CANCELAR* sua participação:\n\n`;
+            resMissas.rows.forEach((r, idx) => {
+                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*\n\n`;
+            });
+            response += "*0* - Voltar ao Menu Anterior\n*99* - Exibe missas do próximo mês\n\nResponda com o *NÚMERO* da missa que deseja desmarcar.";
+            return response;
+
+        } catch (err) {
+            console.error('Erro fluxoCancelarServir:', err);
+            return "Erro ao processar sua solicitação de consulta.";
+        } finally {
+            if (conn) await conn.close();
+        }
     }
 };
 
@@ -712,6 +763,74 @@ client.on('message_create', async msg => {
                 } catch (err) {
                     console.error('Erro ao salvar missa_servos:', err);
                     await msg.reply("Houve um erro ao confirmar sua escala. Tente novamente.");
+                } finally {
+                    if (conn) await conn.close();
+                }
+            } else {
+                await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
+            }
+        } else if (state.flowId === 'cancelar_selecao') {
+            console.log(`[STATE] Usuário ${phone} selecionando missa para cancelar: ${text}`);
+
+            if (text === '0') {
+                const mainFlow = chatFlows['main_menu'];
+                if (mainFlow) {
+                    await msg.reply(mainFlow.message);
+                    userStates[phone] = { 
+                        flowId: 'main_menu', 
+                        idDizimista: state.idDizimista, 
+                        nomeDizimista: state.nomeDizimista,
+                        apelidoDizimista: state.apelidoDizimista 
+                    };
+                }
+                return;
+            }
+
+            if (text === '99') {
+                const func = internalFunctions.fluxoCancelarServir;
+                const newOffset = (state.monthOffset || 0) + 1;
+                const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, newOffset);
+                await msg.reply(result);
+                return;
+            }
+
+            const index = parseInt(text) - 1;
+            if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
+                const selectedMass = state.availableMasses[index];
+                
+                let conn;
+                try {
+                    conn = await getOracleConnection();
+                    
+                    // Excluir inscrição
+                    await conn.execute(`
+                        DELETE FROM MISSA_SERVOS WHERE ID_MISSA = :m AND ID_DIZIMISTA = :d
+                    `, { m: selectedMass.ID_MISSA, d: state.idDizimista });
+
+                    await msg.reply(`✅ Confirmação: Sua participação na missa de *${selectedMass.DATA} às ${selectedMass.HORA}* foi cancelada. Os coordenadores foram notificados.`);
+
+                    // Buscar coordenadores da pastoral
+                    const resCoord = await conn.execute(`
+                        SELECT d.TELEFONE, d.NOME 
+                        FROM DIZIMISTA_PASTORAL dp
+                        JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+                        WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'
+                    `, { p: selectedMass.ID_PASTORAL });
+
+                    // Notificar coordenadores via WhatsApp
+                    for (const coord of resCoord.rows) {
+                        let coordPhone = coord.TELEFONE.replace(/\D/g, '');
+                        if (coordPhone.length >= 10 && coordPhone.length <= 11) {
+                            coordPhone = '55' + coordPhone;
+                            const sms = `⚠️ *Aviso de Desistência de Escala*\n\nOlá coordenador(a) *${coord.NOME}*!\nO servo *${state.apelidoDizimista || state.nomeDizimista}* acabou de desmarcar sua participação na missa do dia *${selectedMass.DATA} às ${selectedMass.HORA}* (Pastoral: ${selectedMass.PASTORAL_NOME}).\n\n_Mensagem automática do Sistema de Chatbot da Paróquia._`;
+                            await client.sendMessage(coordPhone + '@c.us', sms);
+                        }
+                    }
+
+                    delete userStates[phone];
+                } catch (err) {
+                    console.error('Erro ao excluir missa_servos:', err);
+                    await msg.reply("Houve um erro ao processar o cancelamento. Tente novamente mais tarde.");
                 } finally {
                     if (conn) await conn.close();
                 }
