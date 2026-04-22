@@ -332,11 +332,20 @@ const internalFunctions = {
 
             let response = `Olá *${nomeDizimista}*! 👋\nEscolha em qual missa você deseja servir:\n\n`;
             resMissas.rows.forEach((r, idx) => {
-                let status = "✅ - Disponível";
+                let statusMsg = "";
+                let vagasRestantes = r.QUANTIDADE_SERVOS - r.ATUAIS;
+
                 if (r.JA_INSCRITO > 0) {
-                    status = "🚩 *Você já está servindo aqui*";
-                } else if (r.ATUAIS >= r.QUANTIDADE_SERVOS) {
-                    status = "❌ - Vagas Esgotadas";
+                    statusMsg = "🚩 *Você já está servindo aqui*";
+                } else if (vagasRestantes <= 0) {
+                    statusMsg = "❌ - Vagas Esgotadas";
+                } else {
+                    // Loop preenchendo as linhas disponíveis exatas
+                    const linhasVagas = [];
+                    for(let i = 0; i < vagasRestantes; i++) {
+                        linhasVagas.push("✅ - Disponível");
+                    }
+                    statusMsg = linhasVagas.join('\n');
                 }
                 
                 let servosStr = "";
@@ -346,17 +355,8 @@ const internalFunctions = {
                     servosStr = `\n${list.join('\n')}`;
                 }
 
-                // O layout final, se não tiver servo, vai o status logo embaixo da pastoral
-                // Se o cara ja está inscrito, o Flag vai estar "🚩 Você já está servindo aqui" ou se pode servir, vai o ✅ abaixo do nome de quem ja está servindo. (Mas se ja ta servindo, nao mostra se tem vaga ou n)
-                let finalStatusMsg = status;
-                if (r.JA_INSCRITO > 0) {
-                    // Não mostra "✅ Disponivel" porque ele já está na lista em cima
-                    finalStatusMsg = "";
-                } else {
-                    finalStatusMsg = `\n${status}`;
-                }
-
-                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*${servosStr}${finalStatusMsg}\n\n`;
+                // O layout final
+                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*${servosStr}\n${statusMsg}\n\n`;
             });
             response += "*0* - Voltar ao Menu Anterior\n*99* - Exibe missas do próximo mês\n\nResponda com o *NÚMERO* da opção desejada.";
             return response;
