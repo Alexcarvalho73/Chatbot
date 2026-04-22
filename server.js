@@ -810,27 +810,34 @@ client.on('message_create', async msg => {
                     await msg.reply(`✅ Confirmação: Sua participação na missa de *${selectedMass.DATA} às ${selectedMass.HORA}* foi cancelada. Os coordenadores foram notificados.`);
 
                     // Buscar coordenadores da pastoral
-                    const resCoord = await conn.execute(`
-                        SELECT d.TELEFONE, d.NOME 
-                        FROM DIZIMISTA_PASTORAL dp
-                        JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
-                        WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'
-                    `, { p: selectedMass.ID_PASTORAL });
+                    try {
+                        const resCoord = await conn.execute(`
+                            SELECT d.TELEFONE, d.NOME 
+                            FROM DIZIMISTA_PASTORAL dp
+                            JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+                            WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'
+                        `, { p: selectedMass.ID_PASTORAL });
 
-                    // Notificar coordenadores via WhatsApp
-                    for (const coord of resCoord.rows) {
-                        let coordPhone = coord.TELEFONE.replace(/\D/g, '');
-                        if (coordPhone.length >= 10 && coordPhone.length <= 11) {
-                            coordPhone = '55' + coordPhone;
-                            const sms = `⚠️ *Aviso de Desistência de Escala*\n\nOlá coordenador(a) *${coord.NOME}*!\nO servo *${state.apelidoDizimista || state.nomeDizimista}* acabou de desmarcar sua participação na missa do dia *${selectedMass.DATA} às ${selectedMass.HORA}* (Pastoral: ${selectedMass.PASTORAL_NOME}).\n\n_Mensagem automática do Sistema de Chatbot da Paróquia._`;
-                            await client.sendMessage(coordPhone + '@c.us', sms);
+                        // Notificar coordenadores via WhatsApp
+                        for (const coord of resCoord.rows) {
+                            if (coord.TELEFONE) {
+                                let coordPhone = coord.TELEFONE.replace(/\D/g, '');
+                                if (coordPhone.length >= 10 && coordPhone.length <= 11) {
+                                    coordPhone = '55' + coordPhone;
+                                    const sms = `⚠️ *Aviso de Desistência de Escala*\n\nOlá coordenador(a) *${coord.NOME}*!\nO servo *${state.apelidoDizimista || state.nomeDizimista}* acabou de desmarcar sua participação na missa do dia *${selectedMass.DATA} às ${selectedMass.HORA}* (Pastoral: ${selectedMass.PASTORAL_NOME}).\n\n_Mensagem automática do Sistema de Chatbot da Paróquia._`;
+                                    // Ignora erro no disparo para que o script prossiga
+                                    await client.sendMessage(coordPhone + '@c.us', sms).catch(e => console.error("Erro ao notificar whats", e));
+                                }
+                            }
                         }
+                    } catch (errCoord) {
+                        console.error("Erro ao buscar coordenadores ou enviar alerta:", errCoord);
                     }
 
                     delete userStates[phone];
                 } catch (err) {
                     console.error('Erro ao excluir missa_servos:', err);
-                    await msg.reply("Houve um erro ao processar o cancelamento. Tente novamente mais tarde.");
+                    await msg.reply("Houve um erro no banco de dados ao tentar processar seu cancelamento.");
                 } finally {
                     if (conn) await conn.close();
                 }
