@@ -30,12 +30,9 @@ const authMiddleware = (req, res, next) => {
                 path: '/' 
             });
             console.log('[AUTH] Token validado pela URL. Cookie gerado.');
-            
-            // Redireciona para limpar o token da URL e carregar o sistema com o cookie
-            return res.redirect('/chatbot/');
         }
         
-        // Se a validação foi pelo cookie, deixa prosseguir normalmente
+        // Deixa prosseguir normalmente (o frontend fará o clean url via replaceState)
         return next();
     }
 

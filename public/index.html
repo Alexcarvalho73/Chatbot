@@ -528,7 +528,20 @@
 
     <script>
         const urlParams = new URLSearchParams(window.location.search);
-        const token = urlParams.get('token');
+        let token = urlParams.get('token');
+
+        // Lógica de Persistência e URL Limpa (Frontend)
+        if (token) {
+            // Salva no localStorage para as próximas conexões/reloads
+            localStorage.setItem('chatbot_auth_token', token);
+            // Limpa a URL visível no navegador sem recarregar a página
+            window.history.replaceState({}, document.title, window.location.pathname);
+            console.log("Token recebido via URL e salvo!");
+        } else {
+            // Se não tem na URL, tenta recuperar do localStorage
+            token = localStorage.getItem('chatbot_auth_token');
+            console.log("Recuperando token do armazenamento local...");
+        }
 
         const socket = io({ 
             path: '/chatbot/socket.io',
