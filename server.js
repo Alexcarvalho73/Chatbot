@@ -335,18 +335,25 @@ const internalFunctions = {
                 let statusMsg = "";
                 let vagasRestantes = r.QUANTIDADE_SERVOS - r.ATUAIS;
 
-                if (r.JA_INSCRITO > 0) {
-                    statusMsg = "🚩 *Você já está servindo aqui*";
-                } else if (vagasRestantes <= 0) {
-                    statusMsg = "❌ - Vagas Esgotadas";
-                } else {
-                    // Loop preenchendo as linhas disponíveis exatas
-                    const linhasVagas = [];
-                    for(let i = 0; i < vagasRestantes; i++) {
-                        linhasVagas.push("✅ - Disponível");
-                    }
-                    statusMsg = linhasVagas.join('\n');
+                const linhasVagas = [];
+                for(let i = 0; i < vagasRestantes; i++) {
+                    linhasVagas.push("✅ - Disponível");
                 }
+
+                if (vagasRestantes <= 0) {
+                    if (r.JA_INSCRITO > 0) {
+                        statusMsg = "🚩 *Você já está servindo aqui*";
+                    } else {
+                        statusMsg = "❌ - Vagas Esgotadas";
+                    }
+                } else {
+                    if (r.JA_INSCRITO > 0) {
+                        statusMsg = "🚩 *Você já está servindo aqui*\n" + linhasVagas.join('\n');
+                    } else {
+                        statusMsg = linhasVagas.join('\n');
+                    }
+                }
+
                 
                 let servosStr = "";
                 if (r.SERVOS_ATUAIS) {
