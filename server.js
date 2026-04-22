@@ -948,6 +948,13 @@ io.on('connection', (socket) => {
             socket.emit('history', { chatId, messages: msgData });
         } catch (err) {
             console.error('Error fetching history:', err);
+            socket.emit('history', { chatId, messages: [
+                {
+                    body: `[Sistema: Não foi possível sincronizar o histórico neste momento. Detalhes: ${err.message}]`,
+                    fromMe: false,
+                    timestamp: new Date().toLocaleTimeString()
+                }
+            ]});
         }
     });
 
