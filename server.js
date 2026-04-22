@@ -270,7 +270,11 @@ const internalFunctions = {
         } catch (err) {
             console.error('Erro listarMissas:', err);
             return "Erro ao buscar missas. Tente novamente mais tarde.";
-       fluxoServir: async (msg, contact, userData, pMonthOffset = 0) => {
+        } finally {
+            if (conn) await conn.close();
+        }
+    },
+    fluxoServir: async (msg, contact, userData, pMonthOffset = 0) => {
         const phone = contact.number;
         const idDizimista = userData.id;
         const nomeDizimista = userData.apelido || userData.nome;
