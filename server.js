@@ -304,7 +304,7 @@ const internalFunctions = {
                         FROM MISSA_SERVOS ms2 JOIN DIZIMISTAS d ON ms2.ID_DIZIMISTA = d.ID_DIZIMISTA 
                         WHERE ms2.ID_MISSA = m.ID_MISSA AND ms2.ID_PASTORAL = mp.ID_PASTORAL) as SERVOS_ATUAIS
                 FROM MISSAS m
-                JOIN MISSA_PASTORAL mp ON m.ID_MISSA = m.ID_MISSA
+                JOIN MISSA_PASTORAL mp ON m.ID_MISSA = mp.ID_MISSA
                 JOIN PASTORAIS p ON mp.ID_PASTORAL = p.ID_PASTORAL
                 WHERE mp.ID_PASTORAL IN (${idsPastoral.join(',')})
                 AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= TRUNC(SYSDATE)
@@ -332,20 +332,31 @@ const internalFunctions = {
 
             let response = `Olá *${nomeDizimista}*! 👋\nEscolha em qual missa você deseja servir:\n\n`;
             resMissas.rows.forEach((r, idx) => {
-                let status = "✅ _(Disponível)_";
+                let status = "✅ - Disponível";
                 if (r.JA_INSCRITO > 0) {
                     status = "🚩 *Você já está servindo aqui*";
                 } else if (r.ATUAIS >= r.QUANTIDADE_SERVOS) {
-                    status = "❌ _(Vagas Esgotadas)_";
+                    status = "❌ - Vagas Esgotadas";
                 }
                 
                 let servosStr = "";
                 if (r.SERVOS_ATUAIS) {
+                    // Separa a string de servos e quebra por linha, colocando o usuario atual em Negrito
                     const list = r.SERVOS_ATUAIS.split(', ').map(n => n.trim() === nomeDizimista.trim() ? `*${n.trim()}*` : n.trim());
-                    servosStr = `\n👥 Servindo: ${list.join(', ')}`;
+                    servosStr = `\n${list.join('\n')}`;
                 }
 
-                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*${servosStr}\n${status}\n\n`;
+                // O layout final, se não tiver servo, vai o status logo embaixo da pastoral
+                // Se o cara ja está inscrito, o Flag vai estar "🚩 Você já está servindo aqui" ou se pode servir, vai o ✅ abaixo do nome de quem ja está servindo. (Mas se ja ta servindo, nao mostra se tem vaga ou n)
+                let finalStatusMsg = status;
+                if (r.JA_INSCRITO > 0) {
+                    // Não mostra "✅ Disponivel" porque ele já está na lista em cima
+                    finalStatusMsg = "";
+                } else {
+                    finalStatusMsg = `\n${status}`;
+                }
+
+                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*${servosStr}${finalStatusMsg}\n\n`;
             });
             response += "*0* - Voltar ao Menu Anterior\n*99* - Exibe missas do próximo mês\n\nResponda com o *NÚMERO* da opção desejada.";
             return response;
