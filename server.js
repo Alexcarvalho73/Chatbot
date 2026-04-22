@@ -78,6 +78,9 @@ oracledb.autoCommit = true;
 // Define TNS_ADMIN globalmente na inicialização para o driver localizar tnsnames.ora e sqlnet.ora
 process.env.TNS_ADMIN = oracleConfig.walletLocation;
 
+// Cache local de mensagens para mitigar bugs do fetchMessages do whatsapp-web.js
+const messageCache = {};
+
 async function getOracleConnection() {
     try {
         // Define TNS_ADMIN para localizar tnsnames.ora e sqlnet.ora na Wallet
@@ -590,6 +593,17 @@ client.on('message_create', async msg => {
     const chat = await msg.getChat();
     const contact = await msg.getContact();
 
+    try {
+        const chatId = chat.id._serialized;
+        if (!messageCache[chatId]) messageCache[chatId] = [];
+        messageCache[chatId].push({
+            body: msg.body || (msg.hasMedia ? '[Mídia/Imagem/Áudio]' : '[Mensagem de Sistema]'),
+            fromMe: msg.fromMe,
+            timestamp: new Date(msg.timestamp * 1000).toLocaleTimeString()
+        });
+        if (messageCache[chatId].length > 50) messageCache[chatId].shift(); // Mantém as ultimas 50
+    } catch (e) { }
+
     // Envia a mensagem (recebida ou enviada) para o Dashboard com contexto do chat
     io.emit('new-message', {
         chatId: chat.id._serialized,
@@ -948,13 +962,23 @@ io.on('connection', (socket) => {
             socket.emit('history', { chatId, messages: msgData });
         } catch (err) {
             console.error('Error fetching history:', err);
-            socket.emit('history', { chatId, messages: [
-                {
-                    body: `[Sistema: Não foi possível sincronizar o histórico neste momento. Detalhes: ${err.message}]`,
+            
+            let cached = messageCache[chatId] || [];
+            if (cached.length === 0) {
+                cached = [{
+                    body: `[Aviso: O Histórico remoto do WhatsApp está indisponível devido a bugs atuais da plataforma Meta. Exibindo apenas mensagens desde que o servidor iniciou...]`,
                     fromMe: false,
                     timestamp: new Date().toLocaleTimeString()
-                }
-            ]});
+                }];
+            } else {
+                cached = [{
+                    body: `[Aviso: Devido a atualizações do WhatsApp, limitando o resgate de mensagens antigas, exibindo apenas as conversas capturadas recentemente na sessão atual do Servidor.]`,
+                    fromMe: false,
+                    timestamp: new Date().toLocaleTimeString()
+                }, ...cached];
+            }
+
+            socket.emit('history', { chatId, messages: cached });
         }
     });
 
