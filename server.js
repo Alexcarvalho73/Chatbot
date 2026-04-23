@@ -182,6 +182,25 @@ async function initOracle() {
             `, mainMenuData);
             console.log('Default main_menu seeded.');
         }
+
+        // Verifica se a tabela MENSAGENS existe
+        const checkTableMensagens = await conn.execute(`
+            SELECT table_name FROM user_tables WHERE table_name = 'MENSAGENS'
+        `);
+
+        if (checkTableMensagens.rows.length === 0) {
+            console.log('Table MENSAGENS not found. Creating...');
+            await conn.execute(`
+                CREATE TABLE MENSAGENS (
+                    ID_MENSAGENS NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    TELEFONE VARCHAR2(20),
+                    TEXTO VARCHAR2(4000),
+                    STATUS NUMBER DEFAULT 0,
+                    RETORNO VARCHAR2(1000)
+                )
+            `);
+            console.log('Table MENSAGENS created successfully.');
+        }
     } catch (err) {
         console.error('Error initializing Oracle:', err);
         dbStatus = false;
@@ -604,6 +623,9 @@ client.on('ready', () => {
     lastQr = null;
     console.log('Client is ready!');
     io.emit('ready', 'WhatsApp está pronto!');
+    
+    // Inicia a rotina de busca de mensagens programadas
+    startMessageRoutine();
 });
 
 client.on('authenticated', () => {
@@ -1053,6 +1075,92 @@ io.on('connection', (socket) => {
         }
     });
 });
+
+// Rotina de Disparo de Mensagens Agendadas
+let messageIntervalFunc;
+const CHECK_INTERVAL_MINUTES = 10; // Configurável
+
+function startMessageRoutine() {
+    if (messageIntervalFunc) clearInterval(messageIntervalFunc);
+    
+    // Roda a cada X minutos (convertido para milissegundos)
+    const intervalMs = CHECK_INTERVAL_MINUTES * 60 * 1000;
+    
+    // Roda a rotina pela primeira vez em 10 segundos para testar na inicialização
+    setTimeout(execMessageRoutine, 10000);
+    messageIntervalFunc = setInterval(execMessageRoutine, intervalMs);
+}
+
+async function execMessageRoutine() {
+    if (!isReady) return; // Só roda se o WhatsApp estiver conectado
+    
+    let conn;
+    try {
+        conn = await getOracleConnection();
+        
+        // Busca mensagens pendentes
+        const result = await conn.execute(`
+            SELECT ID_MENSAGENS, TELEFONE, TEXTO 
+            FROM MENSAGENS 
+            WHERE STATUS = 0
+            ORDER BY ID_MENSAGENS ASC
+        `);
+        
+        if (result.rows.length === 0) return;
+        
+        console.log(`[ROUTINE] Encontradas ${result.rows.length} mensagens pendentes para envio.`);
+        
+        for (const row of result.rows) {
+            try {
+                let idMsg = row.ID_MENSAGENS;
+                let phone = row.TELEFONE;
+                let text = row.TEXTO;
+                
+                if (!phone || !text) {
+                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Telefone ou Texto vazio' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+                    continue;
+                }
+                
+                // Limpa e formata o telefone
+                const cleanPhone = phone.replace(/\D/g, '');
+                if (cleanPhone.length < 10) {
+                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Número curto ou inválido' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+                    continue;
+                }
+
+                // Obtem o ID correto no WhatsApp
+                const numberDetails = await client.getNumberId(cleanPhone);
+                
+                if (numberDetails) {
+                    const targetId = numberDetails._serialized;
+                    await client.sendMessage(targetId, text);
+                    console.log(`[ROUTINE] Mensagem ID ${idMsg} enviada com sucesso para ${phone}.`);
+                    
+                    // Atualiza STATUS para 1
+                    await conn.execute(`
+                        UPDATE MENSAGENS 
+                        SET STATUS = 1, RETORNO = 'Enviado com sucesso' 
+                        WHERE ID_MENSAGENS = :id
+                    `, { id: idMsg });
+                } else {
+                    console.log(`[ROUTINE] Número ${phone} não possui WhatsApp ativo.`);
+                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Número não possui WhatsApp' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+                }
+            } catch (sendErr) {
+                console.error(`[ROUTINE] Erro ao enviar mensagem ID ${row.ID_MENSAGENS}:`, sendErr);
+                let erroMsg = sendErr.message ? sendErr.message.substring(0, 950) : "Erro desconhecido";
+                await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = :ret WHERE ID_MENSAGENS = :id`, { ret: 'Exception: ' + erroMsg, id: row.ID_MENSAGENS });
+            }
+            
+            // Pausa de 5 segundos entre cada disparo para evitar banimento do WhatsApp
+            await new Promise(res => setTimeout(res, 5000));
+        }
+    } catch (err) {
+        console.error('[ROUTINE] Erro na busca de mensagens:', err);
+    } finally {
+        if (conn) await conn.close();
+    }
+}
 
 // Inicialização Inteligente
 const sessionPath = path.join(__dirname, '.wwebjs_auth', 'session-main-session');
