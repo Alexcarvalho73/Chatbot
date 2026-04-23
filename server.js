@@ -884,16 +884,18 @@ client.on('message_create', async msg => {
                             WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'
                         `, { p: selectedMass.ID_PASTORAL });
 
-                        // Notificar coordenadores via WhatsApp
+                        // Enfileirar notificação para coordenadores na tabela MENSAGENS
                         for (const coord of resCoord.rows) {
                             if (coord.TELEFONE) {
-                                let coordPhone = coord.TELEFONE.replace(/\D/g, '');
-                                if (coordPhone.length >= 10 && coordPhone.length <= 11) {
-                                    coordPhone = '55' + coordPhone;
-                                    const sms = `⚠️ *Aviso de Desistência de Escala*\n\nOlá coordenador(a) *${coord.NOME}*!\nO servo *${state.apelidoDizimista || state.nomeDizimista}* acabou de desmarcar sua participação na missa do dia *${selectedMass.DATA} às ${selectedMass.HORA}* (Pastoral: ${selectedMass.PASTORAL_NOME}).\n\n_Mensagem automática do Sistema de Chatbot da Paróquia._`;
-                                    // Ignora erro no disparo para que o script prossiga
-                                    await client.sendMessage(coordPhone + '@c.us', sms).catch(e => console.error("Erro ao notificar whats", e));
-                                }
+                                const sms = `O servo ${state.apelidoDizimista || state.nomeDizimista} acabou de cancelar sua participação na missa do dia ${selectedMass.DATA} das ${selectedMass.HORA}`;
+                                
+                                await conn.execute(`
+                                    INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) 
+                                    VALUES (:tel, :txt, 0)
+                                `, { 
+                                    tel: coord.TELEFONE, 
+                                    txt: sms 
+                                });
                             }
                         }
                     } catch (errCoord) {
