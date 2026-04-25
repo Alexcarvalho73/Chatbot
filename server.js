@@ -480,6 +480,170 @@ const internalFunctions = {
     }
 };
 
+// ============================================================
+// UTILITÁRIOS DE CADASTRO
+// ============================================================
+
+/**
+ * Valida CPF usando o algoritmo dos dígitos verificadores (módulo 11).
+ * Aceita CPF com ou sem formatação (pontos/traço).
+ */
+function validarCPF(cpf) {
+    const c = cpf.replace(/\D/g, '');
+    if (c.length !== 11) return false;
+    if (/^(\d)\1{10}$/.test(c)) return false; // CPFs com todos os dígitos iguais
+    let soma = 0;
+    for (let i = 0; i < 9; i++) soma += parseInt(c[i]) * (10 - i);
+    let r = (soma * 10) % 11;
+    if (r === 10 || r === 11) r = 0;
+    if (r !== parseInt(c[9])) return false;
+    soma = 0;
+    for (let i = 0; i < 10; i++) soma += parseInt(c[i]) * (11 - i);
+    r = (soma * 10) % 11;
+    if (r === 10 || r === 11) r = 0;
+    return r === parseInt(c[10]);
+}
+
+/** Gera uma senha numérica aleatória de 4 dígitos */
+function gerarSenhaRandom4() {
+    return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+/**
+ * Gera um login único no formato primeiro.ultimo, tentando variações
+ * com nome do meio e sufixo numérico em caso de conflito.
+ */
+async function gerarUsernameUnico(conn, nomeCompleto) {
+    const partes = nomeCompleto.trim().split(/\s+/).filter(Boolean);
+    const primeiro = partes[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+    const ultimo   = (partes[partes.length - 1] || primeiro).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+    const meio    = partes.length > 2 ? partes[1].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '') : null;
+
+    const candidatos = [`${primeiro}.${ultimo}`];
+    if (meio) candidatos.push(`${primeiro}.${meio}.${ultimo}`);
+    // Adiciona variantes numéricas como fallback
+    for (let i = 1; i <= 99; i++) candidatos.push(`${primeiro}.${ultimo}${i}`);
+
+    for (const login of candidatos) {
+        const res = await conn.execute('SELECT 1 FROM USUARIOS WHERE LOGIN = :login', { login });
+        if (res.rows.length === 0) return login;
+    }
+    // Extremamente improvável chegar aqui, mas garante um retorno
+    return `${primeiro}.${ultimo}${Date.now()}`;
+}
+
+/**
+ * Inicia o fluxo de cadastro: informa que o número não está cadastrado
+ * e solicita o CPF para busca.
+ */
+async function iniciarFluxoCadastro(msg, phone) {
+    const displayNumber = phone.replace(/^55/, '');
+    userStates[phone] = { flowId: 'cadastro_cpf' };
+    await msg.reply(
+        `Olá! 👋 O número *${displayNumber}* não está cadastrado em nossa paróquia.\n\n` +
+        `Para verificarmos se você já tem um cadastro, por favor, informe o seu *CPF* (apenas números):`
+    );
+    console.log(`[CADASTRO] Iniciando fluxo para o número (não encontrado): ${phone}`);
+}
+
+/**
+ * Finaliza o cadastro: grava DIZIMISTAS e USUARIOS, envia credenciais e orientações.
+ */
+async function finalizarCadastro(msg, phone) {
+    const dados = userStates[phone];
+    let conn;
+    try {
+        conn = await getOracleConnection();
+
+        // --- 1. Grava DIZIMISTAS ---
+        // Formata telefone: remove +55 ou 55 do início, mantém só os dígitos nacionais
+        const telNacional = phone.replace(/^55/, '');
+
+        const resInsertDiz = await conn.execute(`
+            INSERT INTO DIZIMISTAS (NOME, CPF, TELEFONE, EMAIL, CEP, ENDERECO, DATA_NASCIMENTO, STATUS)
+            VALUES (:nome, :cpf, :telefone, :email, :cep, :endereco,
+                    TO_DATE(:nascimento, 'DD/MM/YYYY'), 1)
+        `, {
+            nome:       dados.nome,
+            cpf:        dados.cpf.replace(/\D/g, ''),
+            telefone:   telNacional,
+            email:      dados.email,
+            cep:        dados.cep.replace(/\D/g, ''),
+            endereco:   dados.endereco,
+            nascimento: dados.nascimento
+        }, { autoCommit: false });
+
+        // Recupera o ID gerado
+        const resId = await conn.execute(`SELECT ID_DIZIMISTA FROM DIZIMISTAS WHERE CPF = :cpf`,
+            { cpf: dados.cpf.replace(/\D/g, '') });
+        const idDizimista = resId.rows[0].ID_DIZIMISTA;
+
+        // --- 2. Gera username e senha ---
+        const login = await gerarUsernameUnico(conn, dados.nome);
+        const senha = gerarSenhaRandom4();
+
+        // --- 3. Grava USUARIOS ---
+        await conn.execute(`
+            INSERT INTO USUARIOS (NOME, LOGIN, SENHA_HASH, TROCAR_SENHA, ID_DIZIMISTA)
+            VALUES (:nome, :login, :senha_hash, 1, :id_dizimista)
+        `, {
+            nome:        dados.nome,
+            login:       login,
+            senha_hash:  senha,
+            id_dizimista: idDizimista
+        });
+
+        await conn.commit();
+
+        console.log(`[CADASTRO] Dizimista "${dados.nome}" e usuário "${login}" criados com sucesso. ID_DIZIMISTA: ${idDizimista}`);
+
+        // --- 4. Envia credenciais e orientações ---
+        await msg.reply(
+            `✅ *Cadastro realizado com sucesso!* Bem-vindo(a), *${dados.nome.split(' ')[0]}*! 🙏\n\n` +
+            `Aqui estão suas credenciais de acesso ao sistema:\n\n` +
+            `👤 *Login:* ${login}\n` +
+            `🔑 *Senha:* ${senha}\n\n` +
+            `🌐 Acesse o sistema pelo link:\n` +
+            `https://imaculadocoracaomaria.org.br/\n\n` +
+            `_Na primeira entrada, o sistema solicitará que você crie uma nova senha._`
+        );
+
+        // Pausa breve antes da segunda mensagem de orientação
+        await new Promise(r => setTimeout(r, 2000));
+
+        await msg.reply(
+            `📌 *Próximo passo:*\n\n` +
+            `Para que você possa se candidatar a servir nas missas, você precisa estar vinculado à sua pastoral.\n\n` +
+            `Por favor, procure o seu *coordenador de pastoral* e solicite que ele te inclua na pastoral correspondente no sistema. ` +
+            `Após isso, você poderá usar este chatbot para se inscrever nas missas! 😊\n\n` +
+            `_Digite *menu* a qualquer momento para ver as opções disponíveis._`
+        );
+
+        // Redireciona ao menu principal com identidade já preenchida
+        const mainFlow = chatFlows['main_menu'];
+        if (mainFlow) {
+            await new Promise(r => setTimeout(r, 1500));
+            await msg.reply(mainFlow.message);
+        }
+
+        userStates[phone] = {
+            flowId: 'main_menu',
+            idDizimista: idDizimista,
+            nomeDizimista: dados.nome,
+            apelidoDizimista: dados.nome.split(' ')[0]
+        };
+
+    } catch (err) {
+        console.error('[CADASTRO] Erro ao finalizar cadastro:', err);
+        await msg.reply(
+            '⚠️ Ocorreu um erro ao gravar seu cadastro. Por favor, entre em contato com a secretaria para regularização.'
+        );
+        delete userStates[phone];
+    } finally {
+        if (conn) await conn.close();
+    }
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- API de Configuração de Fluxos ---
@@ -702,8 +866,7 @@ client.on('message_create', async msg => {
             const userData = await internalFunctions.buscarDizimistaPorTelefone(phone);
 
             if (!userData) {
-                const displayNumber = phone.replace(/^55/, '');
-                await msg.reply(`Olá! 👋 Identificamos que este número ${displayNumber} não possui cadastro em nossa paróquia. Para utilizar o chatbot, por favor, entre em contato com a secretaria.`);
+                await iniciarFluxoCadastro(msg, phone);
                 return;
             }
 
@@ -919,6 +1082,185 @@ client.on('message_create', async msg => {
             } else {
                 await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
             }
+        } else if (state.flowId === 'cadastro_cpf') {
+            // ── Etapa: Usuário informou CPF para busca ──
+            const cpfDigitado = text.replace(/\D/g, '');
+            if (cpfDigitado.length !== 11) {
+                await msg.reply('CPF inválido. Por favor, informe os *11 dígitos* do seu CPF (apenas números):');
+                return;
+            }
+            let conn;
+            try {
+                conn = await getOracleConnection();
+                const resCPF = await conn.execute(
+                    `SELECT ID_DIZIMISTA, NOME, TELEFONE FROM DIZIMISTAS WHERE REGEXP_REPLACE(CPF,'[^0-9]','') = :cpf`,
+                    { cpf: cpfDigitado }
+                );
+                if (resCPF.rows.length > 0) {
+                    const diz = resCPF.rows[0];
+                    const telAtual = diz.TELEFONE ? diz.TELEFONE.replace(/\D/g,'') : '';
+                    userStates[phone] = {
+                        flowId: 'cadastro_confirmar_telefone',
+                        idDizimista: diz.ID_DIZIMISTA,
+                        nomeDizimista: diz.NOME
+                    };
+                    await msg.reply(
+                        `✅ Encontramos um cadastro para o CPF informado!\n\n` +
+                        `*Nome:* ${diz.NOME}\n` +
+                        `*Telefone cadastrado:* ${telAtual || 'não informado'}\n\n` +
+                        `Deseja atualizar o telefone cadastrado para o número atual que está sendo usado?\n\n` +
+                        `Digite *S* para confirmar ou *N* para cancelar.`
+                    );
+                } else {
+                    // CPF não encontrado → inicia cadastro completo
+                    userStates[phone] = { flowId: 'cadastro_nome', cpf: cpfDigitado };
+                    await msg.reply(
+                        `Não encontramos nenhum cadastro com esse CPF.\n\n` +
+                        `Vamos criar seu cadastro! 📝\n\n` +
+                        `Por favor, informe seu *Nome Completo*:`
+                    );
+                }
+            } catch (err) {
+                console.error('[CADASTRO] Erro ao buscar CPF:', err);
+                await msg.reply('Ocorreu um erro ao buscar o CPF. Tente novamente mais tarde.');
+                delete userStates[phone];
+            } finally {
+                if (conn) await conn.close();
+            }
+
+        } else if (state.flowId === 'cadastro_confirmar_telefone') {
+            // ── Etapa: Usuário responde S/N para atualizar telefone ──
+            const resposta = text.toLowerCase().trim();
+            if (resposta === 's' || resposta === 'sim') {
+                let conn;
+                try {
+                    conn = await getOracleConnection();
+                    const telNacional = phone.replace(/^55/, '');
+                    await conn.execute(
+                        `UPDATE DIZIMISTAS SET TELEFONE = :tel WHERE ID_DIZIMISTA = :id`,
+                        { tel: telNacional, id: state.idDizimista }
+                    );
+                    console.log(`[CADASTRO] Telefone atualizado para o dizimista ID ${state.idDizimista}`);
+                    // Invalida cache de contatos
+                    dizimistasContactCache = null;
+
+                    const mainFlow = chatFlows['main_menu'];
+                    const hour = new Date().getHours();
+                    let saudacao = 'Boa noite';
+                    if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
+                    else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+
+                    await msg.reply(
+                        `✅ Telefone atualizado com sucesso! ${saudacao}, *${state.nomeDizimista}*! 🙏\n\n` +
+                        (mainFlow ? mainFlow.message : 'Cadastro vinculado. Use *menu* para ver as opções.')
+                    );
+                    userStates[phone] = {
+                        flowId: 'main_menu',
+                        idDizimista: state.idDizimista,
+                        nomeDizimista: state.nomeDizimista,
+                        apelidoDizimista: state.nomeDizimista
+                    };
+                } catch (err) {
+                    console.error('[CADASTRO] Erro ao atualizar telefone:', err);
+                    await msg.reply('Houve um erro ao atualizar o telefone. Tente novamente mais tarde.');
+                    delete userStates[phone];
+                } finally {
+                    if (conn) await conn.close();
+                }
+            } else if (resposta === 'n' || resposta === 'nao' || resposta === 'não') {
+                delete userStates[phone];
+                await msg.reply(
+                    `Tudo bem! Para atualizar o telefone no seu cadastro, por favor entre em contato com o coordenador responsável.\n\n` +
+                    `📞 Você pode tentar novamente digitando qualquer mensagem após a atualização do seu cadastro.`
+                );
+            } else {
+                await msg.reply('Por favor, responda apenas *S* (sim) ou *N* (não).');
+            }
+
+        } else if (state.flowId === 'cadastro_nome') {
+            // ── Etapa 1: Nome Completo ──
+            const nomeTrimmed = msg.body.trim();
+            if (nomeTrimmed.split(/\s+/).length < 2) {
+                await msg.reply('Por favor, informe seu *Nome Completo* (com ao menos nome e sobrenome):');
+                return;
+            }
+            userStates[phone].nome = nomeTrimmed;
+            userStates[phone].flowId = 'cadastro_cpf_novo';
+            // Verifica se o CPF já foi capturado na etapa anterior (re-uso do dado)
+            if (userStates[phone].cpf) {
+                // CPF já coletado, pula para e-mail
+                userStates[phone].flowId = 'cadastro_email';
+                await msg.reply(`Ótimo, *${nomeTrimmed.split(' ')[0]}*! 😊\n\nAgora informe seu *e-mail*:`);
+            } else {
+                await msg.reply(`Ótimo, *${nomeTrimmed.split(' ')[0]}*! 😊\n\nAgora informe seu *CPF* (apenas números):`);
+            }
+
+        } else if (state.flowId === 'cadastro_cpf_novo') {
+            // ── Etapa 2: CPF com validação completa ──
+            const cpfDigitado = msg.body.replace(/\D/g, '');
+            if (!validarCPF(cpfDigitado)) {
+                await msg.reply(
+                    '❌ CPF inválido! Por favor, verifique os números e tente novamente.\n\n' +
+                    'Informe seu *CPF* (apenas os 11 dígitos):'
+                );
+                return;
+            }
+            userStates[phone].cpf = cpfDigitado;
+            userStates[phone].flowId = 'cadastro_email';
+            await msg.reply('CPF validado! ✅\n\nAgora informe seu *e-mail*:');
+
+        } else if (state.flowId === 'cadastro_email') {
+            // ── Etapa 3: E-mail ──
+            const email = msg.body.trim();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                await msg.reply('E-mail inválido. Por favor, informe um *e-mail* válido (ex: joao@gmail.com):');
+                return;
+            }
+            userStates[phone].email = email;
+            userStates[phone].flowId = 'cadastro_cep';
+            await msg.reply('E-mail registrado! ✅\n\nAgora informe seu *CEP* (apenas números):');
+
+        } else if (state.flowId === 'cadastro_cep') {
+            // ── Etapa 4: CEP ──
+            const cep = msg.body.replace(/\D/g, '');
+            if (cep.length !== 8) {
+                await msg.reply('CEP inválido. Por favor, informe os *8 dígitos* do seu CEP (apenas números):');
+                return;
+            }
+            userStates[phone].cep = cep;
+            userStates[phone].flowId = 'cadastro_endereco';
+            await msg.reply('CEP registrado! ✅\n\nAgora informe seu *Endereço completo* (Rua, número, bairro):');
+
+        } else if (state.flowId === 'cadastro_endereco') {
+            // ── Etapa 5: Endereço ──
+            const endereco = msg.body.trim();
+            if (endereco.length < 5) {
+                await msg.reply('Endereço muito curto. Por favor, informe o *Endereço completo* (Rua, número, bairro):');
+                return;
+            }
+            userStates[phone].endereco = endereco;
+            userStates[phone].flowId = 'cadastro_nascimento';
+            await msg.reply('Endereço registrado! ✅\n\nPor último, informe sua *Data de Nascimento* no formato *DD/MM/AAAA*:');
+
+        } else if (state.flowId === 'cadastro_nascimento') {
+            // ── Etapa 6: Data de Nascimento ──
+            const dataNasc = msg.body.trim();
+            if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dataNasc)) {
+                await msg.reply('Data inválida. Por favor, informe no formato *DD/MM/AAAA* (ex: 25/04/1990):');
+                return;
+            }
+            // Valida se é uma data real
+            const [dd, mm, yyyy] = dataNasc.split('/').map(Number);
+            const dataObj = new Date(yyyy, mm - 1, dd);
+            if (dataObj.getFullYear() !== yyyy || dataObj.getMonth() !== mm - 1 || dataObj.getDate() !== dd) {
+                await msg.reply('Data inexistente. Por favor, informe uma *Data de Nascimento* válida (ex: 25/04/1990):');
+                return;
+            }
+            userStates[phone].nascimento = dataNasc;
+            // Informa que está processando
+            await msg.reply('Perfeito! ✨ Aguarde um momento, estamos finalizando seu cadastro...');
+            await finalizarCadastro(msg, phone);
+
         } else {
             // Fallback para qualquer outra coisa: volta ao menu principal preservando ID
             const mainFlow = chatFlows['main_menu'];
