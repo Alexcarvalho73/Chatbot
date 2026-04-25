@@ -643,8 +643,14 @@ client.on('auth_failure', msg => {
 });
 
 client.on('message_create', async msg => {
-    const chat = await msg.getChat();
-    const contact = await msg.getContact();
+    let chat, contact;
+    try {
+        chat = await msg.getChat();
+        contact = await msg.getContact();
+    } catch (initErr) {
+        console.error('[MSG] Erro ao obter chat/contact (Puppeteer timeout?):', initErr.message);
+        return; // Abandona o processamento desta mensagem
+    }
 
     try {
         const chatId = chat.id._serialized;
