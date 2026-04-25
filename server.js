@@ -593,6 +593,7 @@ const client = new Client({
     }),
     puppeteer: {
         headless: true,
+        protocolTimeout: 120000, // 120s — evita ProtocolError timed out sob carga
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -1080,6 +1081,7 @@ io.on('connection', (socket) => {
 
 // Rotina de Disparo de Mensagens Agendadas
 let messageIntervalFunc;
+let isRoutineRunning = false; // Guard para evitar execuções simultâneas
 const CHECK_INTERVAL_MINUTES = 10; // Configurável
 
 function startMessageRoutine() {
@@ -1088,14 +1090,23 @@ function startMessageRoutine() {
     // Roda a cada X minutos (convertido para milissegundos)
     const intervalMs = CHECK_INTERVAL_MINUTES * 60 * 1000;
     
-    // Roda a rotina pela primeira vez em 10 segundos para testar na inicialização
-    setTimeout(execMessageRoutine, 10000);
+    // Roda a rotina pela primeira vez em 30 segundos após estar pronto
+    setTimeout(execMessageRoutine, 30000);
     messageIntervalFunc = setInterval(execMessageRoutine, intervalMs);
 }
 
 async function execMessageRoutine() {
-    if (!isReady) return; // Só roda se o WhatsApp estiver conectado
+    // Dupla proteção: só roda se o WhatsApp estiver conectado E a rotina não estiver já em execução
+    if (!isReady) {
+        console.log('[ROUTINE] Skipped — WhatsApp não está pronto.');
+        return;
+    }
+    if (isRoutineRunning) {
+        console.log('[ROUTINE] Skipped — Rotina já em execução (evitando concorrência).');
+        return;
+    }
     
+    isRoutineRunning = true;
     let conn;
     try {
         conn = await getOracleConnection();
@@ -1108,11 +1119,20 @@ async function execMessageRoutine() {
             ORDER BY ID_MENSAGENS ASC
         `);
         
-        if (result.rows.length === 0) return;
+        if (result.rows.length === 0) {
+            console.log('[ROUTINE] Nenhuma mensagem pendente.');
+            return;
+        }
         
         console.log(`[ROUTINE] Encontradas ${result.rows.length} mensagens pendentes para envio.`);
         
         for (const row of result.rows) {
+            // Verifica se o cliente ainda está ativo antes de cada envio
+            if (!isReady) {
+                console.log('[ROUTINE] WhatsApp desconectou durante a rotina. Abortando.');
+                break;
+            }
+            
             try {
                 let idMsg = row.ID_MENSAGENS;
                 let phone = row.TELEFONE;
@@ -1130,8 +1150,18 @@ async function execMessageRoutine() {
                     continue;
                 }
 
-                // Obtem o ID correto no WhatsApp
-                const numberDetails = await client.getNumberId(cleanPhone);
+                // Obtem o ID correto no WhatsApp (com timeout de proteção)
+                let numberDetails = null;
+                try {
+                    numberDetails = await Promise.race([
+                        client.getNumberId(cleanPhone),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error('getNumberId timeout local')), 60000))
+                    ]);
+                } catch (timeoutErr) {
+                    console.error(`[ROUTINE] Timeout em getNumberId para ID ${idMsg}:`, timeoutErr.message);
+                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = :ret WHERE ID_MENSAGENS = :id`, { ret: 'Falha: Timeout ao verificar número', id: idMsg });
+                    continue;
+                }
                 
                 if (numberDetails) {
                     const targetId = numberDetails._serialized;
@@ -1161,6 +1191,7 @@ async function execMessageRoutine() {
         console.error('[ROUTINE] Erro na busca de mensagens:', err);
     } finally {
         if (conn) await conn.close();
+        isRoutineRunning = false; // Sempre libera o guard ao terminar
     }
 }
 
