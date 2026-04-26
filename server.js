@@ -257,6 +257,10 @@ let lastQr = null;
 // Gerenciamento de Estados
 const userStates = {};
 
+// Guard de processamento: evita que a mesma mensagem/evento paralelo
+// dispare duas respostas simultâneas para o mesmo número.
+const processingPhones = new Set();
+
 // Funções Internas para Chamadas Dinâmicas
 const internalFunctions = {
     notificarAtendente: async (msg, contact) => {
@@ -841,7 +845,15 @@ client.on('message_create', async msg => {
     if (!msg.fromMe) {
         const phone = contact.number;
         const text = msg.body.trim().toLowerCase();
-        
+
+        // Guard: ignora mensagem se este telefone já está sendo processado (evita duplicidade)
+        if (processingPhones.has(phone)) {
+            console.log(`[GUARD] Mensagem de ${phone} ignorada — processamento já em andamento.`);
+            return;
+        }
+        processingPhones.add(phone);
+
+        try {
         // --- 0. COMANDOS GLOBAIS DE NAVEGAÇÃO ---
         if (text === 'menu' || text === 'voltar') {
             console.log(`[NAV] Usuário ${phone} solicitou retorno ao menu principal.`);
@@ -870,21 +882,55 @@ client.on('message_create', async msg => {
                 return;
             }
 
-            // Busca o fluxo do Menu Principal no Banco
+            // --- Verifica se o dizimista já pertence a alguma pastoral ---
+            let connPasCheck;
+            let temPastoral = false;
+            try {
+                connPasCheck = await getOracleConnection();
+                const resPas = await connPasCheck.execute(
+                    `SELECT 1 FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :id AND ROWNUM = 1`,
+                    { id: userData.id }
+                );
+                temPastoral = resPas.rows.length > 0;
+            } catch (e) {
+                console.error('[PASTORAL-CHECK] Erro ao verificar pastoral:', e);
+                temPastoral = true; // em caso de erro, deixa passar para o menu
+            } finally {
+                if (connPasCheck) await connPasCheck.close();
+            }
+
+            // Saudação baseada no horário
+            const hour = new Date().getHours();
+            let saudacao = 'Boa noite';
+            if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
+            else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+            const primeiroNome = (userData.apelido || userData.nome).split(' ')[0];
+
+            if (!temPastoral) {
+                // Sem pastoral → perguntar se participa de alguma
+                userStates[phone] = {
+                    flowId: 'pastoral_participar',
+                    idDizimista: userData.id,
+                    nomeDizimista: userData.nome,
+                    apelidoDizimista: userData.apelido
+                };
+                await msg.reply(
+                    `*${saudacao}, ${primeiroNome}!* 🙏\n\n` +
+                    `Notamos que você ainda não está vinculado a nenhuma pastoral no sistema.\n\n` +
+                    `Você participa de alguma pastoral na paróquia?\n\n` +
+                    `Digite *S* para sim ou *N* para não.`
+                );
+                console.log(`[PASTORAL] Dizimista ${userData.nome} sem pastoral — perguntando participação.`);
+                return;
+            }
+
+            // Com pastoral → comportamento normal
             const mainFlow = chatFlows['main_menu'];
             if (!mainFlow) {
                 await msg.reply(`*Olá, ${userData.nome}!* 🙏\nSeja bem-vindo. No momento nosso menu está em manutenção.`);
                 return;
             }
 
-            // Saudação baseada no horário
-            const hour = new Date().getHours();
-            let saudacao = "Boa noite";
-            if (hour >= 5 && hour < 12) saudacao = "Bom dia";
-            else if (hour >= 12 && hour < 18) saudacao = "Boa tarde";
-
-            const welcomeMsg = `*${saudacao}, ${userData.nome}!* 🙏\n${mainFlow.message}`;
-            
             userStates[phone] = { 
                 flowId: 'main_menu',
                 idDizimista: userData.id,
@@ -892,8 +938,8 @@ client.on('message_create', async msg => {
                 apelidoDizimista: userData.apelido
             };
 
-            await msg.reply(welcomeMsg);
-            console.log(`[FLOW-DB] Menu Principal (DB) enviado para ${userData.nome}`);
+            await msg.reply(`*${saudacao}, ${primeiroNome}!* 🙏\n${mainFlow.message}`);
+            console.log(`[FLOW-DB] Menu Principal enviado para ${userData.nome}`);
             return;
         }
 
@@ -1112,7 +1158,16 @@ client.on('message_create', async msg => {
                         `Digite *S* para confirmar ou *N* para cancelar.`
                     );
                 } else {
-                    // CPF não encontrado → inicia cadastro completo
+                    // CPF não encontrado → valida dígitos antes de abrir cadastro
+                    if (!validarCPF(cpfDigitado)) {
+                        await msg.reply(
+                            `❌ O CPF *${cpfDigitado}* é inválido (dígitos verificadores incorretos).\n\n` +
+                            `Por favor, verifique o número e informe novamente o seu *CPF* (apenas 11 dígitos):`
+                        );
+                        // Mantém o flowId 'cadastro_cpf' para nova tentativa
+                        return;
+                    }
+                    // CPF válido e não cadastrado → inicia cadastro completo
                     userStates[phone] = { flowId: 'cadastro_nome', cpf: cpfDigitado };
                     await msg.reply(
                         `Não encontramos nenhum cadastro com esse CPF.\n\n` +
@@ -1261,6 +1316,170 @@ client.on('message_create', async msg => {
             await msg.reply('Perfeito! ✨ Aguarde um momento, estamos finalizando seu cadastro...');
             await finalizarCadastro(msg, phone);
 
+        } else if (state.flowId === 'pastoral_participar') {
+            // ── Pergunta se participa de pastoral ──
+            const resposta = text.toLowerCase().trim();
+            if (resposta === 's' || resposta === 'sim') {
+                // Lista as pastorais cadastradas
+                let conn;
+                try {
+                    conn = await getOracleConnection();
+                    const resPast = await conn.execute(
+                        `SELECT ID_PASTORAL, NOME, AUTOCADASTRO FROM PASTORAIS WHERE STATUS = 1 ORDER BY NOME ASC`
+                    );
+                    if (resPast.rows.length === 0) {
+                        await msg.reply(
+                            'No momento não há pastorais cadastradas no sistema.\n\n' +
+                            'Por favor, entre em contato com a secretaria para regularizar seu cadastro.'
+                        );
+                        // Vai ao menu mesmo sem pastoral
+                        const mainFlow = chatFlows['main_menu'];
+                        if (mainFlow) {
+                            userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                            await msg.reply(mainFlow.message);
+                        }
+                        return;
+                    }
+
+                    userStates[phone] = {
+                        flowId: 'pastoral_selecao',
+                        idDizimista: state.idDizimista,
+                        nomeDizimista: state.nomeDizimista,
+                        apelidoDizimista: state.apelidoDizimista,
+                        pastoraisDisponiveis: resPast.rows
+                    };
+
+                    let resp = `*Pastorais da Paróquia* 🙏\n\nEscolha o *número* da pastoral em que você participa:\n\n`;
+                    resPast.rows.forEach((p, idx) => {
+                        const icone = p.AUTOCADASTRO === 1 ? '✅' : '💬';
+                        resp += `*${idx + 1}* — ${p.NOME} ${icone}\n`;
+                    });
+                    resp += `\n✅ Entrada imediata  |  💬 Sujeito a aprovação do coordenador\n\n*0* — Não participo de nenhuma`;
+                    await msg.reply(resp);
+
+                } catch (err) {
+                    console.error('[PASTORAL] Erro ao listar pastorais:', err);
+                    await msg.reply('Erro ao buscar pastorais. Tente novamente mais tarde.');
+                } finally {
+                    if (conn) await conn.close();
+                }
+            } else if (resposta === 'n' || resposta === 'nao' || resposta === 'não') {
+                // Não participa → vai ao menu principal
+                const mainFlow = chatFlows['main_menu'];
+                userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                await msg.reply(
+                    'Tudo bem! Quando quiser se vincular a uma pastoral, fale com o coordenador.\n\n' +
+                    (mainFlow ? mainFlow.message : '_Digite *menu* para ver as opções._')
+                );
+            } else {
+                await msg.reply('Por favor, responda apenas *S* (sim) ou *N* (não).');
+            }
+
+        } else if (state.flowId === 'pastoral_selecao') {
+            // ── Usuário escolheu uma pastoral da lista ──
+            if (text === '0') {
+                // Não participa de nenhuma → menu
+                const mainFlow = chatFlows['main_menu'];
+                userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                await msg.reply(
+                    'Entendido! Quando precisar, fale com o coordenador para se vincular a uma pastoral.\n\n' +
+                    (mainFlow ? mainFlow.message : '_Digite *menu* para ver as opções._')
+                );
+                return;
+            }
+
+            const idx = parseInt(text) - 1;
+            const pastorais = state.pastoraisDisponiveis;
+            if (isNaN(idx) || !pastorais || !pastorais[idx]) {
+                await msg.reply(`Opção inválida. Por favor, escolha um número entre *1* e *${pastorais ? pastorais.length : '?'}*, ou *0* para sair.`);
+                return;
+            }
+
+            const pastoralEscolhida = pastorais[idx];
+            const idPastoral = pastoralEscolhida.ID_PASTORAL;
+            const nomePastoral = pastoralEscolhida.NOME;
+            const autocadastro = pastoralEscolhida.AUTOCADASTRO;
+            const nomeServo = state.apelidoDizimista || state.nomeDizimista;
+
+            let conn;
+            try {
+                conn = await getOracleConnection();
+
+                if (autocadastro === 1) {
+                    // --- AUTOCADASTRO: insere diretamente ---
+                    // Verifica se já existe (segurança)
+                    const jaExiste = await conn.execute(
+                        `SELECT 1 FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :d AND ID_PASTORAL = :p`,
+                        { d: state.idDizimista, p: idPastoral }
+                    );
+                    if (jaExiste.rows.length === 0) {
+                        await conn.execute(
+                            `INSERT INTO DIZIMISTA_PASTORAL (ID_DIZIMISTA, ID_PASTORAL, PAPEL) VALUES (:d, :p, 'M')`,
+                            { d: state.idDizimista, p: idPastoral }
+                        );
+                    }
+                    // Notifica coordenadores que o servo se cadastrou
+                    const resCoord = await conn.execute(
+                        `SELECT d.TELEFONE FROM DIZIMISTA_PASTORAL dp
+                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+                         WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'`,
+                        { p: idPastoral }
+                    );
+                    for (const coord of resCoord.rows) {
+                        if (coord.TELEFONE) {
+                            await conn.execute(
+                                `INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) VALUES (:tel, :txt, 0)`,
+                                {
+                                    tel: coord.TELEFONE,
+                                    txt: `🟢 O servo *${nomeServo}* se cadastrou na pastoral *${nomePastoral}* pelo chatbot.`
+                                }
+                            );
+                        }
+                    }
+                    await msg.reply(
+                        `✅ Você foi cadastrado(a) com sucesso na pastoral *${nomePastoral}*! 🙏\n\n` +
+                        `O coordenador foi notificado.`
+                    );
+                    console.log(`[PASTORAL] ${nomeServo} cadastrado na pastoral "${nomePastoral}" (autocadastro).`);
+                } else {
+                    // --- SEM AUTOCADASTRO: apenas envia solicitação ao coordenador ---
+                    const resCoord = await conn.execute(
+                        `SELECT d.TELEFONE FROM DIZIMISTA_PASTORAL dp
+                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+                         WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'`,
+                        { p: idPastoral }
+                    );
+                    for (const coord of resCoord.rows) {
+                        if (coord.TELEFONE) {
+                            await conn.execute(
+                                `INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) VALUES (:tel, :txt, 0)`,
+                                {
+                                    tel: coord.TELEFONE,
+                                    txt: `🟡 O servo *${nomeServo}* solicita inclusão na pastoral *${nomePastoral}* via chatbot. Por favor, verifique e aprove no sistema.`
+                                }
+                            );
+                        }
+                    }
+                    await msg.reply(
+                        `💬 Sua solicitação de ingresso na pastoral *${nomePastoral}* foi enviada ao coordenador! 🙏\n\n` +
+                        `Aguarde o contato do coordenador para confirmação da sua inclusão.`
+                    );
+                    console.log(`[PASTORAL] ${nomeServo} solicitou inclusão na pastoral "${nomePastoral}" (sujeito a aprovação).`);
+                }
+
+                // Volta ao menu principal
+                await new Promise(r => setTimeout(r, 1500));
+                const mainFlow = chatFlows['main_menu'];
+                userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                if (mainFlow) await msg.reply(mainFlow.message);
+
+            } catch (err) {
+                console.error('[PASTORAL] Erro ao processar seleção de pastoral:', err);
+                await msg.reply('Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.');
+            } finally {
+                if (conn) await conn.close();
+            }
+
         } else {
             // Fallback para qualquer outra coisa: volta ao menu principal preservando ID
             const mainFlow = chatFlows['main_menu'];
@@ -1273,6 +1492,12 @@ client.on('message_create', async msg => {
                     apelidoDizimista: state.apelidoDizimista
                 };
             }
+        }
+        } catch (handlerErr) {
+            console.error(`[MSG-HANDLER] Erro não tratado para ${phone}:`, handlerErr);
+        } finally {
+            // Sempre libera o guard ao terminar o processamento
+            processingPhones.delete(phone);
         }
     }
 });
