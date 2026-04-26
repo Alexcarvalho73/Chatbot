@@ -854,7 +854,16 @@ client.on('message_create', async msg => {
         processingPhones.add(phone);
 
         try {
-        // --- 0. COMANDOS GLOBAIS DE NAVEGAÇÃO ---
+        // --- 0. COMANDOS GLOBAIS DE NAVEGAÇÃO E RESET ---
+        // Palavras-chave que reiniciam tudo (case-insensitive, sem acentos)
+        const textNorm = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+        const RESET_KEYWORDS = ['sair', 'recomecar', 'cancelar', 'reiniciar', 'inicio'];
+        const isReset = RESET_KEYWORDS.includes(textNorm);
+
+        // Detecção de entrada incoerente: só pontuação, ponto isolado, ou menos de 2 chars sem sentido
+        const isIncoerente = /^[.\-_!?,;:@#$%^&*()\s]+$/.test(text) ||
+                             (text.length <= 2 && !/^\d+$/.test(text) && text !== 's' && text !== 'n');
+
         if (text === 'menu' || text === 'voltar') {
             console.log(`[NAV] Usuário ${phone} solicitou retorno ao menu principal.`);
             const currentState = userStates[phone];
@@ -870,6 +879,18 @@ client.on('message_create', async msg => {
             }
             return;
         }
+
+        if (isReset) {
+            console.log(`[RESET] Usuário ${phone} solicitou reset com: "${text}"`);
+            const currentState = userStates[phone];
+            delete userStates[phone]; // Limpa todo o estado atual
+            await msg.reply(
+                `🔄 *Conversa reiniciada!*\n\n` +
+                `Envie qualquer mensagem para começarmos novamente. 😊`
+            );
+            return;
+        }
+
 
         let state = userStates[phone];
 
@@ -956,7 +977,26 @@ client.on('message_create', async msg => {
         }
 
         const currentFlow = chatFlows[state.flowId];
-        
+
+        // --- Detecção de entrada incoerente em fluxos multi-passo ---
+        // Só aplica quando o usuário está num fluxo de cadastro ou pastoral (não no menu)
+        const multiStepFlows = [
+            'cadastro_cpf', 'cadastro_confirmar_telefone', 'cadastro_nome',
+            'cadastro_cpf_novo', 'cadastro_email', 'cadastro_cep',
+            'cadastro_endereco', 'cadastro_nascimento',
+            'pastoral_participar', 'pastoral_selecao'
+        ];
+        if (isIncoerente && multiStepFlows.includes(state.flowId)) {
+            console.log(`[INCOERENTE] ${phone} digitou entrada inválida no fluxo ${state.flowId}: "${text}"`);
+            await msg.reply(
+                `⚠️ Não entendi sua mensagem.\n\n` +
+                `• Digite *CANCELAR* para recomeçar do início\n` +
+                `• Digite *MENU* para ir ao menu principal\n` +
+                `• Ou responda a pergunta anterior corretamente.`
+            );
+            return;
+        }
+
         if (currentFlow && currentFlow.options && currentFlow.options[text]) {
             const option = currentFlow.options[text];
             console.log(`[STATE] Usuário ${phone} selecionou opção ${text} no fluxo ${state.flowId} (Tipo: ${option.type})`);
