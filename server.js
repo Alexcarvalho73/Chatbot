@@ -1048,13 +1048,9 @@ client.on('message_create', async msg => {
             if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
                 const selectedMass = state.availableMasses[index];
                 
+                // Verificação em cache: já está inscrito
                 if (selectedMass.JA_INSCRITO > 0) {
                     await msg.reply("Você já está inscrito para servir nesta missa! Escolha outra opção ou digite *0* para voltar.");
-                    return;
-                }
-
-                if (selectedMass.ATUAIS >= selectedMass.QUANTIDADE_SERVOS) {
-                    await msg.reply("Esta missa já está com o quadro de servos completo. Por favor, escolha outra.");
                     return;
                 }
 
@@ -1062,29 +1058,73 @@ client.on('message_create', async msg => {
                 let conn;
                 try {
                     conn = await getOracleConnection();
-                    
-                    // Verificar se já não está inscrito
-                    const check = await conn.execute(`
+
+                    // --- Validação em tempo real (anti-race condition) ---
+                    // Checa vagas ATUAIS diretamente no banco antes de inserir
+                    const vagasCheck = await conn.execute(`
+                        SELECT COUNT(*) as ATUAIS, mp.QUANTIDADE_SERVOS
+                        FROM MISSA_SERVOS ms
+                        JOIN MISSA_PASTORAL mp ON ms.ID_MISSA = mp.ID_MISSA AND ms.ID_PASTORAL = mp.ID_PASTORAL
+                        WHERE ms.ID_MISSA = :m AND ms.ID_PASTORAL = :p
+                        GROUP BY mp.QUANTIDADE_SERVOS
+                    `, { m: selectedMass.ID_MISSA, p: selectedMass.ID_PASTORAL });
+
+                    const vagasRow = vagasCheck.rows[0];
+                    const atuaisDB  = vagasRow ? vagasRow.ATUAIS : 0;
+                    const maxServos = vagasRow ? vagasRow.QUANTIDADE_SERVOS : selectedMass.QUANTIDADE_SERVOS;
+
+                    if (atuaisDB >= maxServos) {
+                        // Vaga foi preenchida por outro servo enquanto o usuário escolhia
+                        console.log(`[RACE] Vaga da missa ${selectedMass.ID_MISSA} esgotada em tempo real para ${phone}.`);
+                        await msg.reply(
+                            `⚠️ Que pena! A vaga na missa de *${selectedMass.DATA} às ${selectedMass.HORA}* acabou de ser preenchida por outro servo.` +
+                            `\n\nAqui está a lista atualizada para uma nova escolha:`
+                        );
+                        // Reexibe lista atualizada
+                        const listaAtualizada = await internalFunctions.fluxoServir(
+                            msg, contact,
+                            { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
+                            state.monthOffset || 0
+                        );
+                        await msg.reply(listaAtualizada);
+                        return;
+                    }
+
+                    // Verificar duplicidade para este dizimista
+                    const checkDup = await conn.execute(`
                         SELECT 1 FROM MISSA_SERVOS WHERE ID_MISSA = :m AND ID_DIZIMISTA = :d
                     `, { m: selectedMass.ID_MISSA, d: state.idDizimista });
 
-                    if (check.rows.length > 0) {
-                        await msg.reply("Você já está inscrito para servir nesta missa!");
-                    } else {
-                        await conn.execute(`
-                            INSERT INTO MISSA_SERVOS (ID_MISSA, ID_DIZIMISTA, ID_PASTORAL) 
-                            VALUES (:m, :d, :p)
-                        `, { 
-                            m: selectedMass.ID_MISSA, 
-                            d: state.idDizimista, 
-                            p: selectedMass.ID_PASTORAL 
-                        });
-                        await msg.reply(`✅ Confirmado! Você foi escalado para servir na missa de *${selectedMass.DATA} às ${selectedMass.HORA}*. Deus abençoe!`);
+                    if (checkDup.rows.length > 0) {
+                        await msg.reply("Você já está inscrito para servir nesta missa! Escolha outra opção ou digite *0* para voltar.");
+                        return;
                     }
-                    delete userStates[phone];
+
+                    // --- INSERT ---
+                    await conn.execute(`
+                        INSERT INTO MISSA_SERVOS (ID_MISSA, ID_DIZIMISTA, ID_PASTORAL) 
+                        VALUES (:m, :d, :p)
+                    `, { 
+                        m: selectedMass.ID_MISSA, 
+                        d: state.idDizimista, 
+                        p: selectedMass.ID_PASTORAL 
+                    });
+
+                    await msg.reply(`✅ Confirmado! Você foi escalado para servir na missa de *${selectedMass.DATA} às ${selectedMass.HORA}*. Deus abençoe! 🙏`);
+
+                    // Reexibe lista atualizada para possível nova inscrição
+                    await new Promise(r => setTimeout(r, 800));
+                    const listaAtualizada = await internalFunctions.fluxoServir(
+                        msg, contact,
+                        { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
+                        state.monthOffset || 0
+                    );
+                    await msg.reply(listaAtualizada);
+
                 } catch (err) {
                     console.error('Erro ao salvar missa_servos:', err);
                     await msg.reply("Houve um erro ao confirmar sua escala. Tente novamente.");
+                    delete userStates[phone];
                 } finally {
                     if (conn) await conn.close();
                 }
