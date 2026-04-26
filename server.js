@@ -330,10 +330,22 @@ const internalFunctions = {
             if (conn) await conn.close();
         }
     },
-    fluxoServir: async (msg, contact, userData, pMonthOffset = 0) => {
+    fluxoServir: async (msg, contact, userData, pMonthOffset = 0, pForced = false) => {
         const phone = contact.number;
         const idDizimista = userData.id;
         const nomeDizimista = userData.apelido || userData.nome;
+
+        // Se for o mês atual, não houver offset forçado e passar do dia 15
+        if (pMonthOffset === 0 && !pForced && new Date().getDate() > 15) {
+            userStates[phone] = { 
+                ...userStates[phone],
+                flowId: 'servir_escolha_mes',
+                idDizimista: userData.id, 
+                nomeDizimista: userData.nome, 
+                apelidoDizimista: userData.apelido 
+            };
+            return "O dia 15 já passou. Para qual período deseja ver as missas disponíveis?\n\n1️⃣ - Missas restantes deste mês\n2️⃣ - Missas do próximo mês\n\n*0* - Voltar ao Menu Principal";
+        }
 
         let conn;
         try {
@@ -431,7 +443,7 @@ const internalFunctions = {
             if (conn) await conn.close();
         }
     },
-    fluxoCancelarServir: async (msg, contact, userData, pMonthOffset = 0) => {
+    fluxoCancelarServir: async (msg, contact, userData) => {
         const phone = contact.number;
         const idDizimista = userData.id;
         const nomeDizimista = userData.apelido || userData.nome;
@@ -440,7 +452,7 @@ const internalFunctions = {
         try {
             conn = await getOracleConnection();
             
-            // Buscar Missas que o usuário está inscrito
+            // Buscar Missas que o usuário está inscrito (sem restrição de mês, apenas de hoje em diante)
             const resMissas = await conn.execute(`
                 SELECT m.ID_MISSA, TO_CHAR(TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, m.HORA, m.COMUNIDADE, 
                        ms.ID_PASTORAL, p.NOME as PASTORAL_NOME
@@ -449,10 +461,8 @@ const internalFunctions = {
                 JOIN PASTORAIS p ON ms.ID_PASTORAL = p.ID_PASTORAL
                 WHERE ms.ID_DIZIMISTA = :idDizimista
                 AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= TRUNC(SYSDATE)
-                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), :monthOffset)
-                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') <= LAST_DAY(ADD_MONTHS(TRUNC(SYSDATE, 'MM'), :monthOffset))
                 ORDER BY m.DATA_MISSA, m.HORA
-            `, { idDizimista, monthOffset: pMonthOffset });
+            `, { idDizimista });
 
             if (resMissas.rows.length === 0) {
                 return `Olá ${nomeDizimista}! Não encontrei nenhuma missa em que você esteja escalado(a) neste período para cancelar.`;
@@ -472,7 +482,7 @@ const internalFunctions = {
             resMissas.rows.forEach((r, idx) => {
                 response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*\n\n`;
             });
-            response += "*0* - Voltar ao Menu Anterior\n*99* - Exibe missas do próximo mês\n\nResponda com o *NÚMERO* da missa que deseja desmarcar.";
+            response += "*0* - Voltar ao Menu Anterior\n\nResponda com o *NÚMERO* da missa que deseja desmarcar.";
             return response;
 
         } catch (err) {
@@ -1019,6 +1029,29 @@ client.on('message_create', async msg => {
                     await msg.reply("Erro ao processar opção dinâmica.");
                 }
             }
+        } else if (state.flowId === 'servir_escolha_mes') {
+            console.log(`[STATE] Usuário ${phone} decidindo mês para servir: ${text}`);
+
+            if (text === '1') {
+                const result = await internalFunctions.fluxoServir(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 0, true);
+                await msg.reply(result);
+            } else if (text === '2') {
+                const result = await internalFunctions.fluxoServir(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 1, true);
+                await msg.reply(result);
+            } else if (text === '0') {
+                const mainFlow = chatFlows['main_menu'];
+                if (mainFlow) {
+                    await msg.reply(mainFlow.message);
+                    userStates[phone] = { 
+                        flowId: 'main_menu', 
+                        idDizimista: state.idDizimista, 
+                        nomeDizimista: state.nomeDizimista,
+                        apelidoDizimista: state.apelidoDizimista 
+                    };
+                }
+            } else {
+                await msg.reply("Opção inválida. Digite *1* para este mês, *2* para o próximo mês ou *0* para voltar.");
+            }
         } else if (state.flowId === 'servir_selecao') {
             console.log(`[STATE] Usuário ${phone} selecionando missa: ${text}`);
 
@@ -1148,13 +1181,6 @@ client.on('message_create', async msg => {
                 return;
             }
 
-            if (text === '99') {
-                const func = internalFunctions.fluxoCancelarServir;
-                const newOffset = (state.monthOffset || 0) + 1;
-                const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, newOffset);
-                await msg.reply(result);
-                return;
-            }
 
             const index = parseInt(text) - 1;
             if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
