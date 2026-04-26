@@ -474,7 +474,6 @@ const internalFunctions = {
                 idDizimista, 
                 nomeDizimista: userData.nome,
                 apelidoDizimista: userData.apelido,
-                monthOffset: pMonthOffset,
                 availableMasses: resMissas.rows 
             };
 
