@@ -517,33 +517,6 @@ function validarCPF(cpf) {
     return r === parseInt(c[10]);
 }
 
-/** Gera uma senha numérica aleatória de 4 dígitos */
-function gerarSenhaRandom4() {
-    return String(Math.floor(1000 + Math.random() * 9000));
-}
-
-/**
- * Gera um login único no formato primeiro.ultimo, tentando variações
- * com nome do meio e sufixo numérico em caso de conflito.
- */
-async function gerarUsernameUnico(conn, nomeCompleto) {
-    const partes = nomeCompleto.trim().split(/\s+/).filter(Boolean);
-    const primeiro = partes[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
-    const ultimo   = (partes[partes.length - 1] || primeiro).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
-    const meio    = partes.length > 2 ? partes[1].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '') : null;
-
-    const candidatos = [`${primeiro}.${ultimo}`];
-    if (meio) candidatos.push(`${primeiro}.${meio}.${ultimo}`);
-    // Adiciona variantes numéricas como fallback
-    for (let i = 1; i <= 99; i++) candidatos.push(`${primeiro}.${ultimo}${i}`);
-
-    for (const login of candidatos) {
-        const res = await conn.execute('SELECT 1 FROM USUARIOS WHERE LOGIN = :login', { login });
-        if (res.rows.length === 0) return login;
-    }
-    // Extremamente improvável chegar aqui, mas garante um retorno
-    return `${primeiro}.${ultimo}${Date.now()}`;
-}
 
 /**
  * Inicia o fluxo de cadastro: informa que o número não está cadastrado
@@ -560,7 +533,7 @@ async function iniciarFluxoCadastro(msg, phone) {
 }
 
 /**
- * Finaliza o cadastro: grava DIZIMISTAS e USUARIOS, envia credenciais e orientações.
+ * Finaliza o cadastro: grava DIZIMISTAS, envia boas-vindas e inicia identificação pastoral.
  */
 async function finalizarCadastro(msg, phone) {
     const dados = userStates[phone];
@@ -569,10 +542,9 @@ async function finalizarCadastro(msg, phone) {
         conn = await getOracleConnection();
 
         // --- 1. Grava DIZIMISTAS ---
-        // Formata telefone: remove +55 ou 55 do início, mantém só os dígitos nacionais
         const telNacional = phone.replace(/^55/, '');
 
-        const resInsertDiz = await conn.execute(`
+        await conn.execute(`
             INSERT INTO DIZIMISTAS (NOME, CPF, TELEFONE, EMAIL, CEP, ENDERECO, DATA_NASCIMENTO, STATUS)
             VALUES (:nome, :cpf, :telefone, :email, :cep, :endereco,
                     TO_DATE(:nascimento, 'DD/MM/YYYY'), 1)
@@ -584,67 +556,48 @@ async function finalizarCadastro(msg, phone) {
             cep:        dados.cep.replace(/\D/g, ''),
             endereco:   dados.endereco,
             nascimento: dados.nascimento
-        }, { autoCommit: false });
+        }, { autoCommit: true });
 
         // Recupera o ID gerado
         const resId = await conn.execute(`SELECT ID_DIZIMISTA FROM DIZIMISTAS WHERE CPF = :cpf`,
             { cpf: dados.cpf.replace(/\D/g, '') });
+        
+        if (resId.rows.length === 0) throw new Error("Falha ao recuperar ID do dizimista cadastrado.");
         const idDizimista = resId.rows[0].ID_DIZIMISTA;
 
-        // --- 2. Gera username e senha ---
-        const login = await gerarUsernameUnico(conn, dados.nome);
-        const senha = gerarSenhaRandom4();
+        // Invalida cache de contatos para incluir o novo dizimista
+        dizimistasContactCache = null;
 
-        // --- 3. Grava USUARIOS ---
-        await conn.execute(`
-            INSERT INTO USUARIOS (NOME, LOGIN, SENHA_HASH, TROCAR_SENHA, ID_DIZIMISTA)
-            VALUES (:nome, :login, :senha_hash, 1, :id_dizimista)
-        `, {
-            nome:        dados.nome,
-            login:       login,
-            senha_hash:  senha,
-            id_dizimista: idDizimista
-        });
+        console.log(`[CADASTRO] Dizimista "${dados.nome}" criado com sucesso. ID_DIZIMISTA: ${idDizimista}`);
 
-        await conn.commit();
-
-        console.log(`[CADASTRO] Dizimista "${dados.nome}" e usuário "${login}" criados com sucesso. ID_DIZIMISTA: ${idDizimista}`);
-
-        // --- 4. Envia credenciais e orientações ---
-        await msg.reply(
-            `✅ *Cadastro realizado com sucesso!* Bem-vindo(a), *${dados.nome.split(' ')[0]}*! 🙏\n\n` +
-            `Aqui estão suas credenciais de acesso ao sistema:\n\n` +
-            `👤 *Login:* ${login}\n` +
-            `🔑 *Senha:* ${senha}\n\n` +
-            `🌐 Acesse o sistema pelo link:\n` +
-            `https://imaculadocoracaomaria.org.br/\n\n` +
-            `_Na primeira entrada, o sistema solicitará que você crie uma nova senha._`
-        );
-
-        // Pausa breve antes da segunda mensagem de orientação
-        await new Promise(r => setTimeout(r, 2000));
+        // --- 2. Boas Vindas ---
+        const hour = new Date().getHours();
+        let saudacao = 'Boa noite';
+        if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
+        else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+        const primeiroNome = dados.nome.split(' ')[0];
 
         await msg.reply(
-            `📌 *Próximo passo:*\n\n` +
-            `Para que você possa se candidatar a servir nas missas, você precisa estar vinculado à sua pastoral.\n\n` +
-            `Por favor, procure o seu *coordenador de pastoral* e solicite que ele te inclua na pastoral correspondente no sistema. ` +
-            `Após isso, você poderá usar este chatbot para se inscrever nas missas! 😊\n\n` +
-            `_Digite *menu* a qualquer momento para ver as opções disponíveis._`
+            `✅ *Cadastro realizado com sucesso!* ${saudacao}, *${primeiroNome}*! 🙏\n\n` +
+            `Seja bem-vindo(a) à nossa paróquia!`
         );
 
-        // Redireciona ao menu principal com identidade já preenchida
-        const mainFlow = chatFlows['main_menu'];
-        if (mainFlow) {
-            await new Promise(r => setTimeout(r, 1500));
-            await msg.reply(mainFlow.message);
-        }
+        // --- 3. Segue o fluxo normal de identificação: Pastoral ---
+        // Como o cadastro acabou de ser feito, sabemos que não tem pastoral vinculada.
+        await new Promise(r => setTimeout(r, 1500));
 
         userStates[phone] = {
-            flowId: 'main_menu',
+            flowId: 'pastoral_participar',
             idDizimista: idDizimista,
             nomeDizimista: dados.nome,
-            apelidoDizimista: dados.nome.split(' ')[0]
+            apelidoDizimista: primeiroNome
         };
+
+        await msg.reply(
+            `Notamos que você ainda não está vinculado a nenhuma pastoral no sistema.\n\n` +
+            `Você participa de alguma pastoral na paróquia?\n\n` +
+            `Digite *S* para sim ou *N* para não.`
+        );
 
     } catch (err) {
         console.error('[CADASTRO] Erro ao finalizar cadastro:', err);
