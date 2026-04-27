@@ -526,6 +526,30 @@ function formatarCPF(cpf) {
     return `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9, 11)}`;
 }
 
+/**
+ * Gera uma string fonética baseada nas palavras do nome (cada palavra > 2 chars).
+ * Utiliza a função SOUNDEX do Oracle para cada palavra.
+ */
+async function generatePhonetics(name, conn) {
+    const words = (name || '').toString().split(/\s+/).filter(w => w.length > 2);
+    if (words.length === 0) return "";
+    
+    // Constrói a query: SELECT SOUNDEX(:1) as P1, SOUNDEX(:2) as P2... FROM DUAL
+    const selectCols = words.map((_, i) => `SOUNDEX(:${i + 1}) as P${i + 1}`).join(", ");
+    const query = `SELECT ${selectCols} FROM DUAL`;
+    
+    try {
+        const result = await conn.execute(query, words);
+        if (result.rows && result.rows.length > 0) {
+            const row = result.rows[0];
+            return Object.values(row).filter(v => v).join(" ");
+        }
+    } catch (err) {
+        console.error('Erro em generatePhonetics:', err);
+    }
+    return "";
+}
+
 
 /**
  * Inicia o fluxo de cadastro: informa que o número não está cadastrado
@@ -552,13 +576,15 @@ async function finalizarCadastro(msg, phone) {
 
         // --- 1. Grava DIZIMISTAS ---
         const telNacional = phone.replace(/^55/, '');
+        const fonetica = await generatePhonetics(dados.nome, conn);
 
         await conn.execute(`
             INSERT INTO DIZIMISTAS (NOME, FONETICA, CPF, TELEFONE, EMAIL, CEP, ENDERECO, DATA_NASCIMENTO, STATUS)
-            VALUES (:nome, SOUNDEX(:nome), :cpf, :telefone, :email, :cep, :endereco,
+            VALUES (:nome, :fonetica, :cpf, :telefone, :email, :cep, :endereco,
                     TO_DATE(:nascimento, 'DD/MM/YYYY'), 1)
         `, {
             nome:       dados.nome,
+            fonetica:   fonetica,
             cpf:        formatarCPF(dados.cpf),
             telefone:   telNacional,
             email:      dados.email,
@@ -568,7 +594,7 @@ async function finalizarCadastro(msg, phone) {
         }, { autoCommit: true });
 
         // Recupera o ID gerado
-        const resId = await conn.execute(`SELECT ID_DIZIMISTA FROM DIZIMISTAS WHERE REGEXP_REPLACE(CPF,'[^0-9]','') = :cpf`,
+        const resId = await conn.execute(`SELECT ID_DIZIMISTA FROM DIZIMISTAS WHERE CPF = :cpf`,
             { cpf: dados.cpf.replace(/\D/g, '') });
         
         if (resId.rows.length === 0) throw new Error("Falha ao recuperar ID do dizimista cadastrado.");
