@@ -517,6 +517,15 @@ function validarCPF(cpf) {
     return r === parseInt(c[10]);
 }
 
+/**
+ * Formata CPF para o padrão 000.000.000-00
+ */
+function formatarCPF(cpf) {
+    const c = (cpf || '').replace(/\D/g, '');
+    if (c.length !== 11) return c;
+    return `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9, 11)}`;
+}
+
 
 /**
  * Inicia o fluxo de cadastro: informa que o número não está cadastrado
@@ -545,12 +554,12 @@ async function finalizarCadastro(msg, phone) {
         const telNacional = phone.replace(/^55/, '');
 
         await conn.execute(`
-            INSERT INTO DIZIMISTAS (NOME, CPF, TELEFONE, EMAIL, CEP, ENDERECO, DATA_NASCIMENTO, STATUS)
-            VALUES (:nome, :cpf, :telefone, :email, :cep, :endereco,
+            INSERT INTO DIZIMISTAS (NOME, FONETICA, CPF, TELEFONE, EMAIL, CEP, ENDERECO, DATA_NASCIMENTO, STATUS)
+            VALUES (:nome, SOUNDEX(:nome), :cpf, :telefone, :email, :cep, :endereco,
                     TO_DATE(:nascimento, 'DD/MM/YYYY'), 1)
         `, {
             nome:       dados.nome,
-            cpf:        dados.cpf.replace(/\D/g, ''),
+            cpf:        formatarCPF(dados.cpf),
             telefone:   telNacional,
             email:      dados.email,
             cep:        dados.cep.replace(/\D/g, ''),
@@ -559,7 +568,7 @@ async function finalizarCadastro(msg, phone) {
         }, { autoCommit: true });
 
         // Recupera o ID gerado
-        const resId = await conn.execute(`SELECT ID_DIZIMISTA FROM DIZIMISTAS WHERE CPF = :cpf`,
+        const resId = await conn.execute(`SELECT ID_DIZIMISTA FROM DIZIMISTAS WHERE REGEXP_REPLACE(CPF,'[^0-9]','') = :cpf`,
             { cpf: dados.cpf.replace(/\D/g, '') });
         
         if (resId.rows.length === 0) throw new Error("Falha ao recuperar ID do dizimista cadastrado.");
