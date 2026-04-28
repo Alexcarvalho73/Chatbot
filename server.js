@@ -330,7 +330,7 @@ const internalFunctions = {
             if (conn) await conn.close();
         }
     },
-    fluxoServir: async (msg, contact, userData, pMonthOffset = 0, pForced = false) => {
+    fluxoServir: async (msg, contact, userData, pMonthOffset = 0, pForced = false, pOnlyWithVacancies = null) => {
         const phone = contact.number;
         const idDizimista = userData.id;
         const nomeDizimista = userData.apelido || userData.nome;
@@ -345,6 +345,21 @@ const internalFunctions = {
                 apelidoDizimista: userData.apelido 
             };
             return "O dia 15 já passou. Para qual período deseja ver as missas disponíveis?\n\n1️⃣ - Missas restantes deste mês\n2️⃣ - Missas do próximo mês\n\n*0* - Voltar ao Menu Principal";
+        }
+
+        // Recupera opção de filtro do parâmetro ou do estado salvo
+        const onlyWithVacancies = pOnlyWithVacancies !== null ? pOnlyWithVacancies : userStates[phone]?.onlyWithVacancies;
+
+        if (onlyWithVacancies === undefined || onlyWithVacancies === null) {
+            userStates[phone] = {
+                ...userStates[phone],
+                flowId: 'servir_escolha_filtro',
+                idDizimista: userData.id,
+                nomeDizimista: userData.nome,
+                apelidoDizimista: userData.apelido,
+                monthOffset: pMonthOffset
+            };
+            return "Como você deseja visualizar as missas?\n\n1️⃣ - *Ver Todas* as missas\n2️⃣ - *Somente com Vagas* (ou onde já participo)\n\n*0* - Voltar ao Menu Principal";
         }
 
         let conn;
@@ -386,6 +401,16 @@ const internalFunctions = {
                 return `Olá ${nomeDizimista}! Não encontrei missas agendadas para as suas pastorais neste período.`;
             }
 
+            // Aplicar filtro se solicitado
+            let finalRows = resMissas.rows;
+            if (onlyWithVacancies) {
+                finalRows = resMissas.rows.filter(r => (r.QUANTIDADE_SERVOS - r.ATUAIS > 0) || r.JA_INSCRITO > 0);
+            }
+
+            if (finalRows.length === 0) {
+                return `Olá ${nomeDizimista}! Não há missas com vagas abertas para suas pastorais neste período.`;
+            }
+
             // Guardar no estado para a seleção
             userStates[phone] = { 
                 flowId: 'servir_selecao', 
@@ -393,13 +418,14 @@ const internalFunctions = {
                 nomeDizimista: userData.nome,
                 apelidoDizimista: userData.apelido,
                 monthOffset: pMonthOffset,
-                availableMasses: resMissas.rows 
+                onlyWithVacancies: onlyWithVacancies,
+                availableMasses: finalRows 
             };
 
-            console.log(`[FLOW] Oferecendo ${resMissas.rows.length} missas para ${nomeDizimista} (Mês Offset: ${pMonthOffset})`);
+            console.log(`[FLOW] Oferecendo ${finalRows.length} missas para ${nomeDizimista} (Mês Offset: ${pMonthOffset}, Filtro Vagas: ${onlyWithVacancies})`);
 
             let response = `Olá *${nomeDizimista}*! 👋\nEscolha em qual missa você deseja servir:\n\n`;
-            resMissas.rows.forEach((r, idx) => {
+            finalRows.forEach((r, idx) => {
                 let statusMsg = "";
                 let vagasRestantes = r.QUANTIDADE_SERVOS - r.ATUAIS;
 
@@ -1045,6 +1071,30 @@ client.on('message_create', async msg => {
                 }
             } else {
                 await msg.reply("Opção inválida. Digite *1* para este mês, *2* para o próximo mês ou *0* para voltar.");
+            }
+        } else if (state.flowId === 'servir_escolha_filtro') {
+            console.log(`[STATE] Usuário ${phone} decidindo filtro de missas: ${text}`);
+            if (text === '1' || text === '2') {
+                const onlyWithVacancies = (text === '2');
+                // Salva no estado para manter o parâmetro ao repetir a lista
+                state.onlyWithVacancies = onlyWithVacancies;
+                const result = await internalFunctions.fluxoServir(msg, contact, 
+                    { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 
+                    state.monthOffset || 0, true, onlyWithVacancies);
+                await msg.reply(result);
+            } else if (text === '0') {
+                const mainFlow = chatFlows['main_menu'];
+                if (mainFlow) {
+                    await msg.reply(mainFlow.message);
+                    userStates[phone] = { 
+                        flowId: 'main_menu', 
+                        idDizimista: state.idDizimista, 
+                        nomeDizimista: state.nomeDizimista,
+                        apelidoDizimista: state.apelidoDizimista 
+                    };
+                }
+            } else {
+                await msg.reply("Opção inválida. Digite *1* para Ver Todas, *2* para Somente com Vagas ou *0* para voltar ao menu.");
             }
         } else if (state.flowId === 'servir_selecao') {
             console.log(`[STATE] Usuário ${phone} selecionando missa: ${text}`);
