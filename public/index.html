@@ -618,6 +618,53 @@
             }
         });
 
+        // --- Name Identification Logic ---
+        function getDizimistaNameByPhone(phone) {
+            if (!phone || typeof phone !== 'string') return phone;
+            
+            // Se já não é um número (já tem nome ou letras), retorna ele mesmo
+            // Permitimos espaços, parênteses, traços e o símbolo + no início
+            const onlyNumberPattern = /^[\d\s\+\-\(\)]+$/;
+            if (!onlyNumberPattern.test(phone)) return phone;
+
+            // Limpa o número do WhatsApp: retira tudo que não é dígito
+            let cleanWhatsApp = phone.replace(/\D/g, '');
+            
+            // Retira o DDI 55 se presente
+            if (cleanWhatsApp.startsWith('55')) {
+                cleanWhatsApp = cleanWhatsApp.substring(2);
+            }
+
+            // Regra: acrescentar um 9 depois do DDD (primeiros 2 dígitos)
+            // Somente se tiver pelo menos o DDD (2 dígitos)
+            let normalizedWhatsApp = cleanWhatsApp;
+            if (cleanWhatsApp.length >= 2) {
+                const ddd = cleanWhatsApp.substring(0, 2);
+                const rest = cleanWhatsApp.substring(2);
+                
+                // Se o "rest" já começa com 9 e tem 9 dígitos, provavelmente já tem o 9
+                // Mas seguindo a instrução literal: "acrescentar um 9 depois do DDD"
+                // Para evitar 99 se já tiver o 9, vamos checar se o número resultante teria 11 dígitos
+                if (cleanWhatsApp.length === 10) { // 2 DDD + 8 digits -> falta o 9
+                    normalizedWhatsApp = ddd + '9' + rest;
+                } else {
+                    normalizedWhatsApp = cleanWhatsApp; // Já deve ter o 9 ou é outro formato
+                }
+            }
+
+            // Busca na tabela allDizimistas (carregada via API)
+            if (allDizimistas && allDizimistas.length > 0) {
+                const match = allDizimistas.find(d => {
+                    if (!d.TELEFONE) return false;
+                    const cleanDB = d.TELEFONE.replace(/\D/g, '');
+                    return cleanDB === normalizedWhatsApp;
+                });
+                if (match) return match.NOME;
+            }
+
+            return phone;
+        }
+
         socket.on('connect_error', (err) => {
             console.error('Socket Connection Error:', err);
             const statusEl = document.getElementById('init-status');
@@ -650,12 +697,13 @@
             const container = document.getElementById('chat-list-container');
             container.innerHTML = '';
             chats.forEach(chat => {
+                const displayName = getDizimistaNameByPhone(chat.name);
                 const item = document.createElement('div');
                 item.className = `chat-item ${activeChatId === chat.id ? 'active' : ''}`;
-                item.onclick = () => selectChat(chat.id, chat.name);
+                item.onclick = () => selectChat(chat.id, displayName);
                 item.innerHTML = `
-                    <div class="profile-img">${chat.name.charAt(0)}</div>
-                    <div class="chat-info"><h3>${chat.name}</h3><p>${chat.unreadCount > 0 ? `<b>${chat.unreadCount} novas</b>` : 'Ver conversa'}</p></div>
+                    <div class="profile-img">${displayName.charAt(0)}</div>
+                    <div class="chat-info"><h3>${displayName}</h3><p>${chat.unreadCount > 0 ? `<b>${chat.unreadCount} novas</b>` : 'Ver conversa'}</p></div>
                 `;
                 container.appendChild(item);
             });
@@ -917,6 +965,9 @@
 
         setInterval(checkDbStatus, 10000);
         checkDbStatus();
+        
+        // Carrega dizimistas ao iniciar para permitir o match de nomes no sidebar
+        loadDizimistas();
     </script>
 </body>
 
