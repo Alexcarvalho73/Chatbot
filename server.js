@@ -577,6 +577,7 @@ async function finalizarCadastro(msg, phone) {
         // --- 1. Grava DIZIMISTAS ---
         const telNacional = phone.replace(/^55/, '');
         const fonetica = await generatePhonetics(dados.nome, conn);
+        console.log(`[CADASTRO] Gerando registro para ${dados.nome}. Fonética: "${fonetica}", CPF: ${dados.cpf}`);
 
         await conn.execute(`
             INSERT INTO DIZIMISTAS (NOME, FONETICA, CPF, TELEFONE, EMAIL, CEP, ENDERECO, DATA_NASCIMENTO, STATUS)
@@ -593,11 +594,16 @@ async function finalizarCadastro(msg, phone) {
             nascimento: dados.nascimento
         }, { autoCommit: true });
 
-        // Recupera o ID gerado
-        const resId = await conn.execute(`SELECT ID_DIZIMISTA FROM DIZIMISTAS WHERE CPF = :cpf`,
-            { cpf: dados.cpf.replace(/\D/g, '') });
+        // Recupera o ID gerado (usando REGEXP_REPLACE para ser robusto com a formatação)
+        const resId = await conn.execute(`
+            SELECT ID_DIZIMISTA FROM DIZIMISTAS 
+            WHERE REGEXP_REPLACE(CPF, '[^0-9]', '') = :cpf
+        `, { cpf: dados.cpf.replace(/\D/g, '') });
         
-        if (resId.rows.length === 0) throw new Error("Falha ao recuperar ID do dizimista cadastrado.");
+        if (resId.rows.length === 0) {
+            console.error(`[CADASTRO] Erro crítico: Registro inserido mas não encontrado para o CPF ${dados.cpf}`);
+            throw new Error("Falha ao recuperar ID do dizimista cadastrado.");
+        }
         const idDizimista = resId.rows[0].ID_DIZIMISTA;
 
         // Invalida cache de contatos para incluir o novo dizimista
@@ -637,7 +643,8 @@ async function finalizarCadastro(msg, phone) {
     } catch (err) {
         console.error('[CADASTRO] Erro ao finalizar cadastro:', err);
         await msg.reply(
-            '⚠️ Ocorreu um erro ao gravar seu cadastro. Por favor, entre em contato com a secretaria para regularização.'
+            `⚠️ Ocorreu um erro ao gravar seu cadastro: ${err.message || 'Erro desconhecido'}\n\n` +
+            `Por favor, entre em contato com a secretaria para regularização.`
         );
         delete userStates[phone];
     } finally {
