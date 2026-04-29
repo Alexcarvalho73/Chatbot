@@ -1246,13 +1246,11 @@ client.on('message_create', async msg => {
                     try {
                         conn = await getOracleConnection();
 
-                        // 1. Verificar permissão (Coordenador ou Usuário do Sistema)
+                        // 1. Verificar permissão (Usuário do Sistema com permissão "Visualizar Missas" - ID 15)
                         const resPerm = await conn.execute(`
-                            SELECT 1 FROM (
-                                SELECT 1 FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :id AND PAPEL = 'C'
-                                UNION
-                                SELECT 1 FROM USUARIOS WHERE ID_DIZIMISTA = :id
-                            ) WHERE ROWNUM = 1
+                            SELECT 1 FROM USUARIOS u
+                            JOIN PERFIL_PERMISSAO pp ON u.ID_PERFIL = pp.ID_PERFIL
+                            WHERE u.ID_DIZIMISTA = :id AND pp.ID_PERMISSAO = 15
                         `, { id: state.idDizimista });
 
                         if (resPerm.rows.length === 0) {
