@@ -5,11 +5,11 @@ const oracleConfig = {
     user: "DIZIMO",
     password: "Alinne05@ora",
     connectString: "imaculado_high",
-    walletLocation: "c:\\Users\\admin\\OneDrive\\Documentos\\ProjetosIA\\ChatBot\\DriveOracle",
+    walletLocation: path.join(__dirname, '..', 'DriveOracle'),
     walletPassword: "Alinne05@ora"
 };
 
-async function checkLigiaStatus() {
+async function checkUsers() {
     process.env.TNS_ADMIN = oracleConfig.walletLocation;
     oracledb.outFormat = oracledb.OUT_FORMAT_OBJECT;
     
@@ -17,8 +17,7 @@ async function checkLigiaStatus() {
     try {
         conn = await oracledb.getConnection(oracleConfig);
         const res = await conn.execute(`
-            SELECT ID_DIZIMISTA, NOME, APELIDO, STATUS FROM DIZIMISTAS 
-            WHERE NOME LIKE '%Ligia%'
+            SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = 'USUARIOS' AND OWNER = 'DIZIMO'
         `);
         console.log(JSON.stringify(res.rows, null, 2));
     } catch (err) {
@@ -28,4 +27,4 @@ async function checkLigiaStatus() {
     }
 }
 
-checkLigiaStatus();
+checkUsers();

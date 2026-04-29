@@ -300,29 +300,37 @@ const internalFunctions = {
         }
     },
     listarMissas: async (msg, contact) => {
+        const phone = contact.number;
         let conn;
         try {
             conn = await getOracleConnection();
-            // Missas do mês a partir de hoje
+            // Missas da semana a partir de hoje (próximos 7 dias)
             const result = await conn.execute(`
-                SELECT TO_CHAR(TO_DATE(DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, HORA, COMUNIDADE, CELEBRANTE 
+                SELECT ID_MISSA, TO_CHAR(TO_DATE(DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, HORA, COMUNIDADE, CELEBRANTE 
                 FROM MISSAS 
                 WHERE TO_DATE(DATA_MISSA, 'YYYY-MM-DD') >= TRUNC(SYSDATE) 
-                AND TO_DATE(DATA_MISSA, 'YYYY-MM-DD') <= LAST_DAY(SYSDATE)
+                AND TO_DATE(DATA_MISSA, 'YYYY-MM-DD') < TRUNC(SYSDATE) + 7
                 AND STATUS = 1
                 ORDER BY DATA_MISSA, HORA
             `);
 
-            if (result.rows.length === 0) return "Não há missas ativas agendadas para o restante deste mês.";
+            if (result.rows.length === 0) return "Não há missas agendadas para os próximos 7 dias.";
 
-            let response = "*📅 MISSAS DO MÊS*\n\n";
-            result.rows.forEach(r => {
-                response += `📍 *${r.DATA} - ${r.HORA}*\nComunidade: ${r.COMUNIDADE}\n`;
-                if (r.CELEBRANTE) {
-                    response += `Celebrante: ${r.CELEBRANTE}\n`;
-                }
-                response += "\n";
+            // Guardar no estado para a seleção
+            userStates[phone] = {
+                ...userStates[phone],
+                flowId: 'listar_missas_selecao',
+                availableMasses: result.rows
+            };
+
+            let response = "📅 *MISSAS DA SEMANA*\n\n";
+            result.rows.forEach((r, idx) => {
+                response += `${idx + 1} - ${r.DATA} - ${r.HORA}\n`;
             });
+
+            response += "\nDigite *0* para menu principal\n";
+            response += "Digite o *número* da missa para ver detalhes (caso tenha permissão)";
+            
             return response;
         } catch (err) {
             console.error('Erro listarMissas:', err);
@@ -1212,6 +1220,95 @@ client.on('message_create', async msg => {
                     }
                 } else {
                     await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
+                }
+            } else if (state.flowId === 'listar_missas_selecao') {
+                console.log(`[STATE] Usuário ${phone} selecionando missa para detalhes: ${text}`);
+
+                if (text === '0') {
+                    const mainFlow = chatFlows['main_menu'];
+                    if (mainFlow) {
+                        await msg.reply(mainFlow.message);
+                        userStates[phone] = {
+                            flowId: 'main_menu',
+                            idDizimista: state.idDizimista,
+                            nomeDizimista: state.nomeDizimista,
+                            apelidoDizimista: state.apelidoDizimista
+                        };
+                    }
+                    return;
+                }
+
+                const index = parseInt(text) - 1;
+                if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
+                    const selectedMass = state.availableMasses[index];
+                    let conn;
+                    try {
+                        conn = await getOracleConnection();
+
+                        // 1. Verificar permissão (Coordenador ou Usuário do Sistema)
+                        const resPerm = await conn.execute(`
+                            SELECT 1 FROM (
+                                SELECT PAPEL FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :id AND PAPEL = 'C'
+                                UNION
+                                SELECT 1 FROM USUARIOS WHERE ID_DIZIMISTA = :id
+                            ) WHERE ROWNUM = 1
+                        `, { id: state.idDizimista });
+
+                        if (resPerm.rows.length === 0) {
+                            await msg.reply("Você não tem permissão para visualizar a escala detalhada desta missa. Entre em contato com seu coordenador.");
+                            return;
+                        }
+
+                        // 2. Buscar detalhes da missa (incluindo descrição se existir)
+                        const resMissa = await conn.execute(`
+                            SELECT COMUNIDADE, CELEBRANTE, 
+                                   TO_CHAR(TO_DATE(DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM/YYYY') as DATA_FMT,
+                                   HORA 
+                            FROM MISSAS WHERE ID_MISSA = :id
+                        `, { id: selectedMass.ID_MISSA });
+
+                        const mData = resMissa.rows[0];
+
+                        // 3. Buscar Pastorais e Servos
+                        const resServos = await conn.execute(`
+                            SELECT p.NOME as PASTORAL, NVL(d.APELIDO, d.NOME) as SERVO
+                            FROM MISSA_SERVOS ms
+                            JOIN PASTORAIS p ON ms.ID_PASTORAL = p.ID_PASTORAL
+                            JOIN DIZIMISTAS d ON ms.ID_DIZIMISTA = d.ID_DIZIMISTA
+                            WHERE ms.ID_MISSA = :id
+                            ORDER BY p.NOME, d.NOME
+                        `, { id: selectedMass.ID_MISSA });
+
+                        let response = `📍 *DETALHES DA MISSA*\n\n`;
+                        response += `📅 *Data:* ${mData.DATA_FMT} às ${mData.HORA}\n`;
+                        response += `⛪ *Comunidade:* ${mData.COMUNIDADE}\n`;
+                        if (mData.CELEBRANTE) response += `👤 *Celebrante:* ${mData.CELEBRANTE}\n`;
+                        response += `\n📋 *ESCALA DE SERVOS:*\n`;
+
+                        if (resServos.rows.length === 0) {
+                            response += "_Nenhum servo escalado ainda._\n";
+                        } else {
+                            let currentPastoral = "";
+                            resServos.rows.forEach(s => {
+                                if (s.PASTORAL !== currentPastoral) {
+                                    currentPastoral = s.PASTORAL;
+                                    response += `\n🛠 *${currentPastoral}:*\n`;
+                                }
+                                response += `• ${s.SERVO}\n`;
+                            });
+                        }
+
+                        response += "\nDigite *0* para voltar ao menu ou outro número para ver outra missa.";
+                        await msg.reply(response);
+
+                    } catch (err) {
+                        console.error('Erro ao buscar detalhes da missa:', err);
+                        await msg.reply("Houve um erro ao buscar os detalhes da missa. Tente novamente.");
+                    } finally {
+                        if (conn) await conn.close();
+                    }
+                } else {
+                    await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista.");
                 }
             } else if (state.flowId === 'cancelar_selecao') {
                 console.log(`[STATE] Usuário ${phone} selecionando missa para cancelar: ${text}`);
