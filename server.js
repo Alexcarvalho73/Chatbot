@@ -325,7 +325,8 @@ const internalFunctions = {
 
             let response = "📅 *MISSAS DA SEMANA*\n\n";
             result.rows.forEach((r, idx) => {
-                response += `${idx + 1} - ${r.DATA} - ${r.HORA}\n`;
+                const celebranteStr = r.CELEBRANTE ? ` - ${r.CELEBRANTE}` : "";
+                response += `${idx + 1} - ${r.DATA} - ${r.HORA}${celebranteStr}\n`;
             });
 
             response += "\nDigite *0* para menu principal\n";
