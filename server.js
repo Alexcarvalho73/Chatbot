@@ -17,21 +17,21 @@ const ACCESS_TOKEN = 'Alinne05@token';
 // Middleware de Autenticação
 const authMiddleware = (req, res, next) => {
     console.log(`[AUTH] Path original recebido: ${req.path} | Query: ${JSON.stringify(req.query)} | URL: ${req.url}`);
-    
+
     // Suporte para o token enviado na query ou no cookie
     const token = req.query.token || req.cookies['chatbot_auth'];
 
     if (token === ACCESS_TOKEN) {
         // Se o token veio na URL e está correto, gera o cookie
         if (req.query.token) {
-            res.cookie('chatbot_auth', ACCESS_TOKEN, { 
+            res.cookie('chatbot_auth', ACCESS_TOKEN, {
                 maxAge: 86400000 * 30, // 30 dias
-                httpOnly: true, 
-                path: '/' 
+                httpOnly: true,
+                path: '/'
             });
             console.log('[AUTH] Token validado pela URL. Cookie gerado.');
         }
-        
+
         // Deixa prosseguir normalmente (o frontend fará o clean url via replaceState)
         return next();
     }
@@ -72,7 +72,7 @@ let dbStatus = false;
 
 // Inicialização Oracle
 oracledb.outFormat = oracledb.OUT_FORMAT_OBJECT;
-oracledb.fetchAsString = [ oracledb.CLOB ]; // Garante que CLOBs venham como string
+oracledb.fetchAsString = [oracledb.CLOB]; // Garante que CLOBs venham como string
 oracledb.autoCommit = true;
 
 // Define TNS_ADMIN globalmente na inicialização para o driver localizar tnsnames.ora e sqlnet.ora
@@ -269,7 +269,7 @@ const internalFunctions = {
     },
     buscarDizimistaPorTelefone: async (phone) => {
         let cleanPhone = phone.replace(/^(\+?55|55)/, '').replace(/\D/g, ''); // Remove prefixos de país e não-dígitos
-        
+
         // Lógica para acrescentar o 9º dígito (Brasil) caso o WhatsApp envie apenas 8 dígitos
         if (cleanPhone.length === 10) { // Formato: DD + 8 dígitos
             cleanPhone = cleanPhone.slice(0, 2) + '9' + cleanPhone.slice(2);
@@ -282,6 +282,7 @@ const internalFunctions = {
             const resDiz = await conn.execute(`
                 SELECT ID_DIZIMISTA, NOME, APELIDO FROM DIZIMISTAS 
                 WHERE REGEXP_REPLACE(TELEFONE, '[^0-9]', '') LIKE :phone
+                AND STATUS = 1
             `, { phone: '%' + cleanPhone });
 
             if (resDiz.rows.length > 0) {
@@ -311,7 +312,7 @@ const internalFunctions = {
                 AND STATUS = 1
                 ORDER BY DATA_MISSA, HORA
             `);
-            
+
             if (result.rows.length === 0) return "Não há missas ativas agendadas para o restante deste mês.";
 
             let response = "*📅 MISSAS DO MÊS*\n\n";
@@ -337,12 +338,12 @@ const internalFunctions = {
 
         // Se for o mês atual, não houver offset forçado e passar do dia 15
         if (pMonthOffset === 0 && !pForced && new Date().getDate() > 15) {
-            userStates[phone] = { 
+            userStates[phone] = {
                 ...userStates[phone],
                 flowId: 'servir_escolha_mes',
-                idDizimista: userData.id, 
-                nomeDizimista: userData.nome, 
-                apelidoDizimista: userData.apelido 
+                idDizimista: userData.id,
+                nomeDizimista: userData.nome,
+                apelidoDizimista: userData.apelido
             };
             return "O dia 15 já passou. Para qual período deseja ver as missas disponíveis?\n\n1️⃣ - Missas restantes deste mês\n2️⃣ - Missas do próximo mês\n\n*0* - Voltar ao Menu Principal";
         }
@@ -365,7 +366,7 @@ const internalFunctions = {
         let conn;
         try {
             conn = await getOracleConnection();
-            
+
             // 2. Buscar Pastorais que ele serve
             const resPast = await conn.execute(`
                 SELECT ID_PASTORAL FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :id
@@ -385,7 +386,8 @@ const internalFunctions = {
                        (SELECT COUNT(*) FROM MISSA_SERVOS ms WHERE ms.ID_MISSA = m.ID_MISSA AND ms.ID_DIZIMISTA = :idDizimista) as JA_INSCRITO,
                        (SELECT LISTAGG(NVL(d.APELIDO, d.NOME), ', ') WITHIN GROUP (ORDER BY NVL(d.APELIDO, d.NOME)) 
                         FROM MISSA_SERVOS ms2 JOIN DIZIMISTAS d ON ms2.ID_DIZIMISTA = d.ID_DIZIMISTA 
-                        WHERE ms2.ID_MISSA = m.ID_MISSA AND ms2.ID_PASTORAL = mp.ID_PASTORAL) as SERVOS_ATUAIS
+                        WHERE ms2.ID_MISSA = m.ID_MISSA AND ms2.ID_PASTORAL = mp.ID_PASTORAL
+                        AND d.STATUS = 1) as SERVOS_ATUAIS
                 FROM MISSAS m
                 JOIN MISSA_PASTORAL mp ON m.ID_MISSA = mp.ID_MISSA
                 JOIN PASTORAIS p ON mp.ID_PASTORAL = p.ID_PASTORAL
@@ -412,14 +414,14 @@ const internalFunctions = {
             }
 
             // Guardar no estado para a seleção
-            userStates[phone] = { 
-                flowId: 'servir_selecao', 
-                idDizimista, 
+            userStates[phone] = {
+                flowId: 'servir_selecao',
+                idDizimista,
                 nomeDizimista: userData.nome,
                 apelidoDizimista: userData.apelido,
                 monthOffset: pMonthOffset,
                 onlyWithVacancies: onlyWithVacancies,
-                availableMasses: finalRows 
+                availableMasses: finalRows
             };
 
             console.log(`[FLOW] Oferecendo ${finalRows.length} missas para ${nomeDizimista} (Mês Offset: ${pMonthOffset}, Filtro Vagas: ${onlyWithVacancies})`);
@@ -430,7 +432,7 @@ const internalFunctions = {
                 let vagasRestantes = r.QUANTIDADE_SERVOS - r.ATUAIS;
 
                 const linhasVagas = [];
-                for(let i = 0; i < vagasRestantes; i++) {
+                for (let i = 0; i < vagasRestantes; i++) {
                     linhasVagas.push("✅ - Disponível");
                 }
 
@@ -448,7 +450,7 @@ const internalFunctions = {
                     }
                 }
 
-                
+
                 let servosStr = "";
                 if (r.SERVOS_ATUAIS) {
                     // Separa a string de servos e quebra por linha, colocando o usuario atual em Negrito
@@ -477,7 +479,7 @@ const internalFunctions = {
         let conn;
         try {
             conn = await getOracleConnection();
-            
+
             // Buscar Missas que o usuário está inscrito (sem restrição de mês, apenas de hoje em diante)
             const resMissas = await conn.execute(`
                 SELECT m.ID_MISSA, TO_CHAR(TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, m.HORA, m.COMUNIDADE, 
@@ -495,12 +497,12 @@ const internalFunctions = {
             }
 
             // Guardar no estado para a seleção de cancelamento
-            userStates[phone] = { 
-                flowId: 'cancelar_selecao', 
-                idDizimista, 
+            userStates[phone] = {
+                flowId: 'cancelar_selecao',
+                idDizimista,
                 nomeDizimista: userData.nome,
                 apelidoDizimista: userData.apelido,
-                availableMasses: resMissas.rows 
+                availableMasses: resMissas.rows
             };
 
             let response = `Olá *${nomeDizimista}*! 👋\nVocê está escalado(a) nas seguintes missas.\nEscolha o número da missa que deseja *CANCELAR* sua participação:\n\n`;
@@ -559,11 +561,11 @@ function formatarCPF(cpf) {
 async function generatePhonetics(name, conn) {
     const words = (name || '').toString().split(/\s+/).filter(w => w.length > 2);
     if (words.length === 0) return "";
-    
+
     // Constrói a query: SELECT SOUNDEX(:1) as P1, SOUNDEX(:2) as P2... FROM DUAL
     const selectCols = words.map((_, i) => `SOUNDEX(:${i + 1}) as P${i + 1}`).join(", ");
     const query = `SELECT ${selectCols} FROM DUAL`;
-    
+
     try {
         const result = await conn.execute(query, words);
         if (result.rows && result.rows.length > 0) {
@@ -610,13 +612,13 @@ async function finalizarCadastro(msg, phone) {
             VALUES (:nome, :fonetica, :cpf, :telefone, :email, :cep, :endereco,
                     TO_DATE(:nascimento, 'DD/MM/YYYY'), 1)
         `, {
-            nome:       dados.nome,
-            fonetica:   fonetica,
-            cpf:        formatarCPF(dados.cpf),
-            telefone:   telNacional,
-            email:      dados.email,
-            cep:        dados.cep.replace(/\D/g, ''),
-            endereco:   dados.endereco,
+            nome: dados.nome,
+            fonetica: fonetica,
+            cpf: formatarCPF(dados.cpf),
+            telefone: telNacional,
+            email: dados.email,
+            cep: dados.cep.replace(/\D/g, ''),
+            endereco: dados.endereco,
             nascimento: dados.nascimento
         }, { autoCommit: true });
 
@@ -624,8 +626,9 @@ async function finalizarCadastro(msg, phone) {
         const resId = await conn.execute(`
             SELECT ID_DIZIMISTA FROM DIZIMISTAS 
             WHERE REGEXP_REPLACE(CPF, '[^0-9]', '') = :cpf
+            AND STATUS = 1
         `, { cpf: dados.cpf.replace(/\D/g, '') });
-        
+
         if (resId.rows.length === 0) {
             console.error(`[CADASTRO] Erro crítico: Registro inserido mas não encontrado para o CPF ${dados.cpf}`);
             throw new Error("Falha ao recuperar ID do dizimista cadastrado.");
@@ -772,7 +775,7 @@ app.get('/api/dizimistas', async (req, res) => {
         const result = await conn.execute(`
             SELECT NOME, TELEFONE 
             FROM DIZIMISTAS 
-            WHERE TELEFONE IS NOT NULL AND ROWNUM <= 500
+            WHERE TELEFONE IS NOT NULL AND STATUS = 1 AND ROWNUM <= 500
             ORDER BY NOME ASC
         `);
         res.json(result.rows);
@@ -822,7 +825,7 @@ client.on('ready', () => {
     lastQr = null;
     console.log('Client is ready!');
     io.emit('ready', 'WhatsApp está pronto!');
-    
+
     // Inicia a rotina de busca de mensagens programadas
     startMessageRoutine();
 });
@@ -884,261 +887,263 @@ client.on('message_create', async msg => {
         processingPhones.add(phone);
 
         try {
-        // --- 0. COMANDOS GLOBAIS DE NAVEGAÇÃO E RESET ---
-        // Palavras-chave que reiniciam tudo (case-insensitive, sem acentos)
-        const textNorm = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-        const RESET_KEYWORDS = ['sair', 'recomecar', 'cancelar', 'reiniciar', 'inicio'];
-        const isReset = RESET_KEYWORDS.includes(textNorm);
+            // --- 0. COMANDOS GLOBAIS DE NAVEGAÇÃO E RESET ---
+            // Palavras-chave que reiniciam tudo (case-insensitive, sem acentos)
+            const textNorm = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+            const RESET_KEYWORDS = ['sair', 'recomecar', 'cancelar', 'reiniciar', 'inicio'];
+            const isReset = RESET_KEYWORDS.includes(textNorm);
 
-        // Detecção de entrada incoerente: só pontuação, ponto isolado, ou menos de 2 chars sem sentido
-        const isIncoerente = /^[.\-_!?,;:@#$%^&*()\s]+$/.test(text) ||
-                             (text.length <= 2 && !/^\d+$/.test(text) && text !== 's' && text !== 'n');
+            // Detecção de entrada incoerente: só pontuação, ponto isolado, ou menos de 2 chars sem sentido
+            const isIncoerente = /^[.\-_!?,;:@#$%^&*()\s]+$/.test(text) ||
+                (text.length <= 2 && !/^\d+$/.test(text) && text !== 's' && text !== 'n');
 
-        if (text === 'menu' || text === 'voltar') {
-            console.log(`[NAV] Usuário ${phone} solicitou retorno ao menu principal.`);
-            const currentState = userStates[phone];
-            const mainFlow = chatFlows['main_menu'];
-            if (mainFlow) {
-                await msg.reply(mainFlow.message);
-                userStates[phone] = { 
-                    flowId: 'main_menu',
-                    idDizimista: currentState ? currentState.idDizimista : null,
-                    nomeDizimista: currentState ? currentState.nomeDizimista : null,
-                    apelidoDizimista: currentState ? currentState.apelidoDizimista : null
-                };
-            }
-            return;
-        }
-
-        if (isReset) {
-            console.log(`[RESET] Usuário ${phone} solicitou reset com: "${text}"`);
-            const currentState = userStates[phone];
-            delete userStates[phone]; // Limpa todo o estado atual
-            await msg.reply(
-                `🔄 *Conversa reiniciada!*\n\n` +
-                `Envie qualquer mensagem para começarmos novamente. 😊`
-            );
-            return;
-        }
-
-
-        let state = userStates[phone];
-
-        if (!state) {
-            // Identifica o usuário logo no primeiro contato
-            const userData = await internalFunctions.buscarDizimistaPorTelefone(phone);
-
-            if (!userData) {
-                await iniciarFluxoCadastro(msg, phone);
+            if (text === 'menu' || text === 'voltar') {
+                console.log(`[NAV] Usuário ${phone} solicitou retorno ao menu principal.`);
+                const currentState = userStates[phone];
+                const mainFlow = chatFlows['main_menu'];
+                if (mainFlow) {
+                    await msg.reply(mainFlow.message);
+                    userStates[phone] = {
+                        flowId: 'main_menu',
+                        idDizimista: currentState ? currentState.idDizimista : null,
+                        nomeDizimista: currentState ? currentState.nomeDizimista : null,
+                        apelidoDizimista: currentState ? currentState.apelidoDizimista : null
+                    };
+                }
                 return;
             }
 
-            // --- Verifica se o dizimista já pertence a alguma pastoral ---
-            let connPasCheck;
-            let temPastoral = false;
-            try {
-                connPasCheck = await getOracleConnection();
-                const resPas = await connPasCheck.execute(
-                    `SELECT 1 FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :id AND ROWNUM = 1`,
-                    { id: userData.id }
+            if (isReset) {
+                console.log(`[RESET] Usuário ${phone} solicitou reset com: "${text}"`);
+                const currentState = userStates[phone];
+                delete userStates[phone]; // Limpa todo o estado atual
+                await msg.reply(
+                    `🔄 *Conversa reiniciada!*\n\n` +
+                    `Envie qualquer mensagem para começarmos novamente. 😊`
                 );
-                temPastoral = resPas.rows.length > 0;
-            } catch (e) {
-                console.error('[PASTORAL-CHECK] Erro ao verificar pastoral:', e);
-                temPastoral = true; // em caso de erro, deixa passar para o menu
-            } finally {
-                if (connPasCheck) await connPasCheck.close();
+                return;
             }
 
-            // Saudação baseada no horário
-            const hour = new Date().getHours();
-            let saudacao = 'Boa noite';
-            if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
-            else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
-            const primeiroNome = (userData.apelido || userData.nome).split(' ')[0];
 
-            if (!temPastoral) {
-                // Sem pastoral → perguntar se participa de alguma
+            let state = userStates[phone];
+
+            if (!state) {
+                // Identifica o usuário logo no primeiro contato
+                const userData = await internalFunctions.buscarDizimistaPorTelefone(phone);
+
+                if (!userData) {
+                    await iniciarFluxoCadastro(msg, phone);
+                    return;
+                }
+
+                // --- Verifica se o dizimista já pertence a alguma pastoral ---
+                let connPasCheck;
+                let temPastoral = false;
+                try {
+                    connPasCheck = await getOracleConnection();
+                    const resPas = await connPasCheck.execute(
+                        `SELECT 1 FROM DIZIMISTA_PASTORAL dp 
+                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+                         WHERE d.ID_DIZIMISTA = :id AND d.STATUS = 1 AND ROWNUM = 1`,
+                        { id: userData.id }
+                    );
+                    temPastoral = resPas.rows.length > 0;
+                } catch (e) {
+                    console.error('[PASTORAL-CHECK] Erro ao verificar pastoral:', e);
+                    temPastoral = true; // em caso de erro, deixa passar para o menu
+                } finally {
+                    if (connPasCheck) await connPasCheck.close();
+                }
+
+                // Saudação baseada no horário
+                const hour = new Date().getHours();
+                let saudacao = 'Boa noite';
+                if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
+                else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+                const primeiroNome = (userData.apelido || userData.nome).split(' ')[0];
+
+                if (!temPastoral) {
+                    // Sem pastoral → perguntar se participa de alguma
+                    userStates[phone] = {
+                        flowId: 'pastoral_participar',
+                        idDizimista: userData.id,
+                        nomeDizimista: userData.nome,
+                        apelidoDizimista: userData.apelido
+                    };
+                    await msg.reply(
+                        `*${saudacao}, ${primeiroNome}!* 🙏\n\n` +
+                        `Notamos que você ainda não está vinculado a nenhuma pastoral no sistema.\n\n` +
+                        `Você participa de alguma pastoral na paróquia?\n\n` +
+                        `Digite *S* para sim ou *N* para não.`
+                    );
+                    console.log(`[PASTORAL] Dizimista ${userData.nome} sem pastoral — perguntando participação.`);
+                    return;
+                }
+
+                // Com pastoral → comportamento normal
+                const mainFlow = chatFlows['main_menu'];
+                if (!mainFlow) {
+                    await msg.reply(`*Olá, ${userData.nome}!* 🙏\nSeja bem-vindo. No momento nosso menu está em manutenção.`);
+                    return;
+                }
+
                 userStates[phone] = {
-                    flowId: 'pastoral_participar',
+                    flowId: 'main_menu',
                     idDizimista: userData.id,
                     nomeDizimista: userData.nome,
                     apelidoDizimista: userData.apelido
                 };
+
+                await msg.reply(`*${saudacao}, ${primeiroNome}!* 🙏\n${mainFlow.message}`);
+                console.log(`[FLOW-DB] Menu Principal enviado para ${userData.nome}`);
+                return;
+            }
+
+            // Se já existe um estado (Usuário já identificado)
+            // Garante que a identidade está presente
+            if (!state.idDizimista || !state.nomeDizimista) {
+                console.log(`[STATE] Recuperando identidade para ${phone}...`);
+                const userData = await internalFunctions.buscarDizimistaPorTelefone(phone);
+                if (userData) {
+                    state.idDizimista = userData.id;
+                    state.nomeDizimista = userData.nome;
+                    state.apelidoDizimista = userData.apelido;
+                }
+            }
+
+            const currentFlow = chatFlows[state.flowId];
+
+            // --- Detecção de entrada incoerente em fluxos multi-passo ---
+            // Só aplica quando o usuário está num fluxo de cadastro ou pastoral (não no menu)
+            const multiStepFlows = [
+                'cadastro_cpf', 'cadastro_confirmar_telefone', 'cadastro_nome',
+                'cadastro_cpf_novo', 'cadastro_email', 'cadastro_cep',
+                'cadastro_endereco', 'cadastro_nascimento',
+                'pastoral_participar', 'pastoral_selecao'
+            ];
+            if (isIncoerente && multiStepFlows.includes(state.flowId)) {
+                console.log(`[INCOERENTE] ${phone} digitou entrada inválida no fluxo ${state.flowId}: "${text}"`);
                 await msg.reply(
-                    `*${saudacao}, ${primeiroNome}!* 🙏\n\n` +
-                    `Notamos que você ainda não está vinculado a nenhuma pastoral no sistema.\n\n` +
-                    `Você participa de alguma pastoral na paróquia?\n\n` +
-                    `Digite *S* para sim ou *N* para não.`
+                    `⚠️ Não entendi sua mensagem.\n\n` +
+                    `• Digite *CANCELAR* para recomeçar do início\n` +
+                    `• Digite *MENU* para ir ao menu principal\n` +
+                    `• Ou responda a pergunta anterior corretamente.`
                 );
-                console.log(`[PASTORAL] Dizimista ${userData.nome} sem pastoral — perguntando participação.`);
                 return;
             }
 
-            // Com pastoral → comportamento normal
-            const mainFlow = chatFlows['main_menu'];
-            if (!mainFlow) {
-                await msg.reply(`*Olá, ${userData.nome}!* 🙏\nSeja bem-vindo. No momento nosso menu está em manutenção.`);
-                return;
-            }
+            if (currentFlow && currentFlow.options && currentFlow.options[text]) {
+                const option = currentFlow.options[text];
+                console.log(`[STATE] Usuário ${phone} selecionou opção ${text} no fluxo ${state.flowId} (Tipo: ${option.type})`);
 
-            userStates[phone] = { 
-                flowId: 'main_menu',
-                idDizimista: userData.id,
-                nomeDizimista: userData.nome,
-                apelidoDizimista: userData.apelido
-            };
-
-            await msg.reply(`*${saudacao}, ${primeiroNome}!* 🙏\n${mainFlow.message}`);
-            console.log(`[FLOW-DB] Menu Principal enviado para ${userData.nome}`);
-            return;
-        }
-
-        // Se já existe um estado (Usuário já identificado)
-        // Garante que a identidade está presente
-        if (!state.idDizimista || !state.nomeDizimista) {
-            console.log(`[STATE] Recuperando identidade para ${phone}...`);
-            const userData = await internalFunctions.buscarDizimistaPorTelefone(phone);
-            if (userData) {
-                state.idDizimista = userData.id;
-                state.nomeDizimista = userData.nome;
-                state.apelidoDizimista = userData.apelido;
-            }
-        }
-
-        const currentFlow = chatFlows[state.flowId];
-
-        // --- Detecção de entrada incoerente em fluxos multi-passo ---
-        // Só aplica quando o usuário está num fluxo de cadastro ou pastoral (não no menu)
-        const multiStepFlows = [
-            'cadastro_cpf', 'cadastro_confirmar_telefone', 'cadastro_nome',
-            'cadastro_cpf_novo', 'cadastro_email', 'cadastro_cep',
-            'cadastro_endereco', 'cadastro_nascimento',
-            'pastoral_participar', 'pastoral_selecao'
-        ];
-        if (isIncoerente && multiStepFlows.includes(state.flowId)) {
-            console.log(`[INCOERENTE] ${phone} digitou entrada inválida no fluxo ${state.flowId}: "${text}"`);
-            await msg.reply(
-                `⚠️ Não entendi sua mensagem.\n\n` +
-                `• Digite *CANCELAR* para recomeçar do início\n` +
-                `• Digite *MENU* para ir ao menu principal\n` +
-                `• Ou responda a pergunta anterior corretamente.`
-            );
-            return;
-        }
-
-        if (currentFlow && currentFlow.options && currentFlow.options[text]) {
-            const option = currentFlow.options[text];
-            console.log(`[STATE] Usuário ${phone} selecionou opção ${text} no fluxo ${state.flowId} (Tipo: ${option.type})`);
-
-            if (option.type === 'reply') {
-                await msg.reply(option.value);
-            } else if (option.type === 'flow') {
-                state.flowId = option.value;
-                const nextFlow = chatFlows[state.flowId];
-                if (nextFlow) {
-                    await msg.reply(nextFlow.message);
+                if (option.type === 'reply') {
+                    await msg.reply(option.value);
+                } else if (option.type === 'flow') {
+                    state.flowId = option.value;
+                    const nextFlow = chatFlows[state.flowId];
+                    if (nextFlow) {
+                        await msg.reply(nextFlow.message);
+                    }
+                } else if (option.type === 'function') {
+                    const func = internalFunctions[option.value];
+                    if (func) {
+                        const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista });
+                        await msg.reply(result);
+                    } else {
+                        console.error(`Função ${option.value} não encontrada.`);
+                        await msg.reply("Erro ao processar opção dinâmica.");
+                    }
                 }
-            } else if (option.type === 'function') {
-                const func = internalFunctions[option.value];
-                if (func) {
-                    const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista });
+            } else if (state.flowId === 'servir_escolha_mes') {
+                console.log(`[STATE] Usuário ${phone} decidindo mês para servir: ${text}`);
+
+                if (text === '1') {
+                    const result = await internalFunctions.fluxoServir(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 0, true);
                     await msg.reply(result);
+                } else if (text === '2') {
+                    const result = await internalFunctions.fluxoServir(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 1, true);
+                    await msg.reply(result);
+                } else if (text === '0') {
+                    const mainFlow = chatFlows['main_menu'];
+                    if (mainFlow) {
+                        await msg.reply(mainFlow.message);
+                        userStates[phone] = {
+                            flowId: 'main_menu',
+                            idDizimista: state.idDizimista,
+                            nomeDizimista: state.nomeDizimista,
+                            apelidoDizimista: state.apelidoDizimista
+                        };
+                    }
                 } else {
-                    console.error(`Função ${option.value} não encontrada.`);
-                    await msg.reply("Erro ao processar opção dinâmica.");
+                    await msg.reply("Opção inválida. Digite *1* para este mês, *2* para o próximo mês ou *0* para voltar.");
                 }
-            }
-        } else if (state.flowId === 'servir_escolha_mes') {
-            console.log(`[STATE] Usuário ${phone} decidindo mês para servir: ${text}`);
-
-            if (text === '1') {
-                const result = await internalFunctions.fluxoServir(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 0, true);
-                await msg.reply(result);
-            } else if (text === '2') {
-                const result = await internalFunctions.fluxoServir(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 1, true);
-                await msg.reply(result);
-            } else if (text === '0') {
-                const mainFlow = chatFlows['main_menu'];
-                if (mainFlow) {
-                    await msg.reply(mainFlow.message);
-                    userStates[phone] = { 
-                        flowId: 'main_menu', 
-                        idDizimista: state.idDizimista, 
-                        nomeDizimista: state.nomeDizimista,
-                        apelidoDizimista: state.apelidoDizimista 
-                    };
+            } else if (state.flowId === 'servir_escolha_filtro') {
+                console.log(`[STATE] Usuário ${phone} decidindo filtro de missas: ${text}`);
+                if (text === '1' || text === '2') {
+                    const onlyWithVacancies = (text === '2');
+                    // Salva no estado para manter o parâmetro ao repetir a lista
+                    state.onlyWithVacancies = onlyWithVacancies;
+                    const result = await internalFunctions.fluxoServir(msg, contact,
+                        { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
+                        state.monthOffset || 0, true, onlyWithVacancies);
+                    await msg.reply(result);
+                } else if (text === '0') {
+                    const mainFlow = chatFlows['main_menu'];
+                    if (mainFlow) {
+                        await msg.reply(mainFlow.message);
+                        userStates[phone] = {
+                            flowId: 'main_menu',
+                            idDizimista: state.idDizimista,
+                            nomeDizimista: state.nomeDizimista,
+                            apelidoDizimista: state.apelidoDizimista
+                        };
+                    }
+                } else {
+                    await msg.reply("Opção inválida. Digite *1* para Ver Todas, *2* para Somente com Vagas ou *0* para voltar ao menu.");
                 }
-            } else {
-                await msg.reply("Opção inválida. Digite *1* para este mês, *2* para o próximo mês ou *0* para voltar.");
-            }
-        } else if (state.flowId === 'servir_escolha_filtro') {
-            console.log(`[STATE] Usuário ${phone} decidindo filtro de missas: ${text}`);
-            if (text === '1' || text === '2') {
-                const onlyWithVacancies = (text === '2');
-                // Salva no estado para manter o parâmetro ao repetir a lista
-                state.onlyWithVacancies = onlyWithVacancies;
-                const result = await internalFunctions.fluxoServir(msg, contact, 
-                    { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 
-                    state.monthOffset || 0, true, onlyWithVacancies);
-                await msg.reply(result);
-            } else if (text === '0') {
-                const mainFlow = chatFlows['main_menu'];
-                if (mainFlow) {
-                    await msg.reply(mainFlow.message);
-                    userStates[phone] = { 
-                        flowId: 'main_menu', 
-                        idDizimista: state.idDizimista, 
-                        nomeDizimista: state.nomeDizimista,
-                        apelidoDizimista: state.apelidoDizimista 
-                    };
-                }
-            } else {
-                await msg.reply("Opção inválida. Digite *1* para Ver Todas, *2* para Somente com Vagas ou *0* para voltar ao menu.");
-            }
-        } else if (state.flowId === 'servir_selecao') {
-            console.log(`[STATE] Usuário ${phone} selecionando missa: ${text}`);
+            } else if (state.flowId === 'servir_selecao') {
+                console.log(`[STATE] Usuário ${phone} selecionando missa: ${text}`);
 
-            if (text === '0') {
-                const mainFlow = chatFlows['main_menu'];
-                if (mainFlow) {
-                    await msg.reply(mainFlow.message);
-                    userStates[phone] = { 
-                        flowId: 'main_menu', 
-                        idDizimista: state.idDizimista, 
-                        nomeDizimista: state.nomeDizimista,
-                        apelidoDizimista: state.apelidoDizimista 
-                    };
-                }
-                return;
-            }
-
-            if (text === '99') {
-                const func = internalFunctions.fluxoServir;
-                const newOffset = (state.monthOffset || 0) + 1;
-                const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, newOffset);
-                await msg.reply(result);
-                return;
-            }
-
-            const index = parseInt(text) - 1;
-            if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
-                const selectedMass = state.availableMasses[index];
-                
-                // Verificação em cache: já está inscrito
-                if (selectedMass.JA_INSCRITO > 0) {
-                    await msg.reply("Você já está inscrito para servir nesta missa! Escolha outra opção ou digite *0* para voltar.");
+                if (text === '0') {
+                    const mainFlow = chatFlows['main_menu'];
+                    if (mainFlow) {
+                        await msg.reply(mainFlow.message);
+                        userStates[phone] = {
+                            flowId: 'main_menu',
+                            idDizimista: state.idDizimista,
+                            nomeDizimista: state.nomeDizimista,
+                            apelidoDizimista: state.apelidoDizimista
+                        };
+                    }
                     return;
                 }
 
-                // Efetivar candidatura
-                let conn;
-                try {
-                    conn = await getOracleConnection();
+                if (text === '99') {
+                    const func = internalFunctions.fluxoServir;
+                    const newOffset = (state.monthOffset || 0) + 1;
+                    const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, newOffset);
+                    await msg.reply(result);
+                    return;
+                }
 
-                    // --- Validação em tempo real (anti-race condition) ---
-                    // Checa vagas ATUAIS diretamente no banco antes de inserir
-                    const vagasCheck = await conn.execute(`
+                const index = parseInt(text) - 1;
+                if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
+                    const selectedMass = state.availableMasses[index];
+
+                    // Verificação em cache: já está inscrito
+                    if (selectedMass.JA_INSCRITO > 0) {
+                        await msg.reply("Você já está inscrito para servir nesta missa! Escolha outra opção ou digite *0* para voltar.");
+                        return;
+                    }
+
+                    // Efetivar candidatura
+                    let conn;
+                    try {
+                        conn = await getOracleConnection();
+
+                        // --- Validação em tempo real (anti-race condition) ---
+                        // Checa vagas ATUAIS diretamente no banco antes de inserir
+                        const vagasCheck = await conn.execute(`
                         SELECT COUNT(*) as ATUAIS, mp.QUANTIDADE_SERVOS
                         FROM MISSA_SERVOS ms
                         JOIN MISSA_PASTORAL mp ON ms.ID_MISSA = mp.ID_MISSA AND ms.ID_PASTORAL = mp.ID_PASTORAL
@@ -1146,503 +1151,503 @@ client.on('message_create', async msg => {
                         GROUP BY mp.QUANTIDADE_SERVOS
                     `, { m: selectedMass.ID_MISSA, p: selectedMass.ID_PASTORAL });
 
-                    const vagasRow = vagasCheck.rows[0];
-                    const atuaisDB  = vagasRow ? vagasRow.ATUAIS : 0;
-                    const maxServos = vagasRow ? vagasRow.QUANTIDADE_SERVOS : selectedMass.QUANTIDADE_SERVOS;
+                        const vagasRow = vagasCheck.rows[0];
+                        const atuaisDB = vagasRow ? vagasRow.ATUAIS : 0;
+                        const maxServos = vagasRow ? vagasRow.QUANTIDADE_SERVOS : selectedMass.QUANTIDADE_SERVOS;
 
-                    if (atuaisDB >= maxServos) {
-                        // Vaga foi preenchida por outro servo enquanto o usuário escolhia
-                        console.log(`[RACE] Vaga da missa ${selectedMass.ID_MISSA} esgotada em tempo real para ${phone}.`);
-                        await msg.reply(
-                            `⚠️ Que pena! A vaga na missa de *${selectedMass.DATA} às ${selectedMass.HORA}* acabou de ser preenchida por outro servo.` +
-                            `\n\nAqui está a lista atualizada para uma nova escolha:`
-                        );
-                        // Reexibe lista atualizada
+                        if (atuaisDB >= maxServos) {
+                            // Vaga foi preenchida por outro servo enquanto o usuário escolhia
+                            console.log(`[RACE] Vaga da missa ${selectedMass.ID_MISSA} esgotada em tempo real para ${phone}.`);
+                            await msg.reply(
+                                `⚠️ Que pena! A vaga na missa de *${selectedMass.DATA} às ${selectedMass.HORA}* acabou de ser preenchida por outro servo.` +
+                                `\n\nAqui está a lista atualizada para uma nova escolha:`
+                            );
+                            // Reexibe lista atualizada
+                            const listaAtualizada = await internalFunctions.fluxoServir(
+                                msg, contact,
+                                { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
+                                state.monthOffset || 0
+                            );
+                            await msg.reply(listaAtualizada);
+                            return;
+                        }
+
+                        // Verificar duplicidade para este dizimista
+                        const checkDup = await conn.execute(`
+                        SELECT 1 FROM MISSA_SERVOS WHERE ID_MISSA = :m AND ID_DIZIMISTA = :d
+                    `, { m: selectedMass.ID_MISSA, d: state.idDizimista });
+
+                        if (checkDup.rows.length > 0) {
+                            await msg.reply("Você já está inscrito para servir nesta missa! Escolha outra opção ou digite *0* para voltar.");
+                            return;
+                        }
+
+                        // --- INSERT ---
+                        await conn.execute(`
+                        INSERT INTO MISSA_SERVOS (ID_MISSA, ID_DIZIMISTA, ID_PASTORAL) 
+                        VALUES (:m, :d, :p)
+                    `, {
+                            m: selectedMass.ID_MISSA,
+                            d: state.idDizimista,
+                            p: selectedMass.ID_PASTORAL
+                        });
+
+                        await msg.reply(`✅ Confirmado! Você foi escalado para servir na missa de *${selectedMass.DATA} às ${selectedMass.HORA}*. Deus abençoe! 🙏`);
+
+                        // Reexibe lista atualizada para possível nova inscrição
+                        await new Promise(r => setTimeout(r, 800));
                         const listaAtualizada = await internalFunctions.fluxoServir(
                             msg, contact,
                             { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
                             state.monthOffset || 0
                         );
                         await msg.reply(listaAtualizada);
-                        return;
+
+                    } catch (err) {
+                        console.error('Erro ao salvar missa_servos:', err);
+                        await msg.reply("Houve um erro ao confirmar sua escala. Tente novamente.");
+                        delete userStates[phone];
+                    } finally {
+                        if (conn) await conn.close();
                     }
+                } else {
+                    await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
+                }
+            } else if (state.flowId === 'cancelar_selecao') {
+                console.log(`[STATE] Usuário ${phone} selecionando missa para cancelar: ${text}`);
 
-                    // Verificar duplicidade para este dizimista
-                    const checkDup = await conn.execute(`
-                        SELECT 1 FROM MISSA_SERVOS WHERE ID_MISSA = :m AND ID_DIZIMISTA = :d
-                    `, { m: selectedMass.ID_MISSA, d: state.idDizimista });
-
-                    if (checkDup.rows.length > 0) {
-                        await msg.reply("Você já está inscrito para servir nesta missa! Escolha outra opção ou digite *0* para voltar.");
-                        return;
+                if (text === '0') {
+                    const mainFlow = chatFlows['main_menu'];
+                    if (mainFlow) {
+                        await msg.reply(mainFlow.message);
+                        userStates[phone] = {
+                            flowId: 'main_menu',
+                            idDizimista: state.idDizimista,
+                            nomeDizimista: state.nomeDizimista,
+                            apelidoDizimista: state.apelidoDizimista
+                        };
                     }
-
-                    // --- INSERT ---
-                    await conn.execute(`
-                        INSERT INTO MISSA_SERVOS (ID_MISSA, ID_DIZIMISTA, ID_PASTORAL) 
-                        VALUES (:m, :d, :p)
-                    `, { 
-                        m: selectedMass.ID_MISSA, 
-                        d: state.idDizimista, 
-                        p: selectedMass.ID_PASTORAL 
-                    });
-
-                    await msg.reply(`✅ Confirmado! Você foi escalado para servir na missa de *${selectedMass.DATA} às ${selectedMass.HORA}*. Deus abençoe! 🙏`);
-
-                    // Reexibe lista atualizada para possível nova inscrição
-                    await new Promise(r => setTimeout(r, 800));
-                    const listaAtualizada = await internalFunctions.fluxoServir(
-                        msg, contact,
-                        { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
-                        state.monthOffset || 0
-                    );
-                    await msg.reply(listaAtualizada);
-
-                } catch (err) {
-                    console.error('Erro ao salvar missa_servos:', err);
-                    await msg.reply("Houve um erro ao confirmar sua escala. Tente novamente.");
-                    delete userStates[phone];
-                } finally {
-                    if (conn) await conn.close();
+                    return;
                 }
-            } else {
-                await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
-            }
-        } else if (state.flowId === 'cancelar_selecao') {
-            console.log(`[STATE] Usuário ${phone} selecionando missa para cancelar: ${text}`);
-
-            if (text === '0') {
-                const mainFlow = chatFlows['main_menu'];
-                if (mainFlow) {
-                    await msg.reply(mainFlow.message);
-                    userStates[phone] = { 
-                        flowId: 'main_menu', 
-                        idDizimista: state.idDizimista, 
-                        nomeDizimista: state.nomeDizimista,
-                        apelidoDizimista: state.apelidoDizimista 
-                    };
-                }
-                return;
-            }
 
 
-            const index = parseInt(text) - 1;
-            if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
-                const selectedMass = state.availableMasses[index];
-                
-                let conn;
-                try {
-                    conn = await getOracleConnection();
-                    
-                    // Excluir inscrição
-                    await conn.execute(`
+                const index = parseInt(text) - 1;
+                if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
+                    const selectedMass = state.availableMasses[index];
+
+                    let conn;
+                    try {
+                        conn = await getOracleConnection();
+
+                        // Excluir inscrição
+                        await conn.execute(`
                         DELETE FROM MISSA_SERVOS WHERE ID_MISSA = :m AND ID_DIZIMISTA = :d
                     `, { m: selectedMass.ID_MISSA, d: state.idDizimista });
 
-                    await msg.reply(`✅ Confirmação: Sua participação na missa de *${selectedMass.DATA} às ${selectedMass.HORA}* foi cancelada. Os coordenadores foram notificados.`);
+                        await msg.reply(`✅ Confirmação: Sua participação na missa de *${selectedMass.DATA} às ${selectedMass.HORA}* foi cancelada. Os coordenadores foram notificados.`);
 
-                    // Buscar coordenadores da pastoral
-                    try {
-                        const resCoord = await conn.execute(`
+                        // Buscar coordenadores da pastoral
+                        try {
+                            const resCoord = await conn.execute(`
                             SELECT d.TELEFONE, d.NOME 
                             FROM DIZIMISTA_PASTORAL dp
                             JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
-                            WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'
+                            WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C' AND d.STATUS = 1
                         `, { p: selectedMass.ID_PASTORAL });
 
-                        // Enfileirar notificação para coordenadores na tabela MENSAGENS
-                        for (const coord of resCoord.rows) {
-                            if (coord.TELEFONE) {
-                                const sms = `O servo ${state.apelidoDizimista || state.nomeDizimista} acabou de cancelar sua participação na missa do dia ${selectedMass.DATA} das ${selectedMass.HORA}`;
-                                
-                                await conn.execute(`
+                            // Enfileirar notificação para coordenadores na tabela MENSAGENS
+                            for (const coord of resCoord.rows) {
+                                if (coord.TELEFONE) {
+                                    const sms = `O servo ${state.apelidoDizimista || state.nomeDizimista} acabou de cancelar sua participação na missa do dia ${selectedMass.DATA} das ${selectedMass.HORA}`;
+
+                                    await conn.execute(`
                                     INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) 
                                     VALUES (:tel, :txt, 0)
-                                `, { 
-                                    tel: coord.TELEFONE, 
-                                    txt: sms 
-                                });
+                                `, {
+                                        tel: coord.TELEFONE,
+                                        txt: sms
+                                    });
+                                }
                             }
+                        } catch (errCoord) {
+                            console.error("Erro ao buscar coordenadores ou enviar alerta:", errCoord);
                         }
-                    } catch (errCoord) {
-                        console.error("Erro ao buscar coordenadores ou enviar alerta:", errCoord);
-                    }
 
-                    delete userStates[phone];
-                } catch (err) {
-                    console.error('Erro ao excluir missa_servos:', err);
-                    await msg.reply("Houve um erro no banco de dados ao tentar processar seu cancelamento.");
-                } finally {
-                    if (conn) await conn.close();
-                }
-            } else {
-                await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
-            }
-        } else if (state.flowId === 'cadastro_cpf') {
-            // ── Etapa: Usuário informou CPF para busca ──
-            const cpfDigitado = text.replace(/\D/g, '');
-            if (cpfDigitado.length !== 11) {
-                await msg.reply('CPF inválido. Por favor, informe os *11 dígitos* do seu CPF (apenas números):');
-                return;
-            }
-            let conn;
-            try {
-                conn = await getOracleConnection();
-                const resCPF = await conn.execute(
-                    `SELECT ID_DIZIMISTA, NOME, TELEFONE FROM DIZIMISTAS WHERE REGEXP_REPLACE(CPF,'[^0-9]','') = :cpf`,
-                    { cpf: cpfDigitado }
-                );
-                if (resCPF.rows.length > 0) {
-                    const diz = resCPF.rows[0];
-                    const telAtual = diz.TELEFONE ? diz.TELEFONE.replace(/\D/g,'') : '';
-                    userStates[phone] = {
-                        flowId: 'cadastro_confirmar_telefone',
-                        idDizimista: diz.ID_DIZIMISTA,
-                        nomeDizimista: diz.NOME
-                    };
-                    await msg.reply(
-                        `✅ Encontramos um cadastro para o CPF informado!\n\n` +
-                        `*Nome:* ${diz.NOME}\n` +
-                        `*Telefone cadastrado:* ${telAtual || 'não informado'}\n\n` +
-                        `Deseja atualizar o telefone cadastrado para o número atual que está sendo usado?\n\n` +
-                        `Digite *S* para confirmar ou *N* para cancelar.`
-                    );
+                        delete userStates[phone];
+                    } catch (err) {
+                        console.error('Erro ao excluir missa_servos:', err);
+                        await msg.reply("Houve um erro no banco de dados ao tentar processar seu cancelamento.");
+                    } finally {
+                        if (conn) await conn.close();
+                    }
                 } else {
-                    // CPF não encontrado → valida dígitos antes de abrir cadastro
-                    if (!validarCPF(cpfDigitado)) {
-                        await msg.reply(
-                            `❌ O CPF *${cpfDigitado}* é inválido (dígitos verificadores incorretos).\n\n` +
-                            `Por favor, verifique o número e informe novamente o seu *CPF* (apenas 11 dígitos):`
-                        );
-                        // Mantém o flowId 'cadastro_cpf' para nova tentativa
-                        return;
-                    }
-                    // CPF válido e não cadastrado → inicia cadastro completo
-                    userStates[phone] = { flowId: 'cadastro_nome', cpf: cpfDigitado };
-                    await msg.reply(
-                        `Não encontramos nenhum cadastro com esse CPF.\n\n` +
-                        `Vamos criar seu cadastro! 📝\n\n` +
-                        `Por favor, informe seu *Nome Completo*:`
-                    );
+                    await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
                 }
-            } catch (err) {
-                console.error('[CADASTRO] Erro ao buscar CPF:', err);
-                await msg.reply('Ocorreu um erro ao buscar o CPF. Tente novamente mais tarde.');
-                delete userStates[phone];
-            } finally {
-                if (conn) await conn.close();
-            }
-
-        } else if (state.flowId === 'cadastro_confirmar_telefone') {
-            // ── Etapa: Usuário responde S/N para atualizar telefone ──
-            const resposta = text.toLowerCase().trim();
-            if (resposta === 's' || resposta === 'sim') {
+            } else if (state.flowId === 'cadastro_cpf') {
+                // ── Etapa: Usuário informou CPF para busca ──
+                const cpfDigitado = text.replace(/\D/g, '');
+                if (cpfDigitado.length !== 11) {
+                    await msg.reply('CPF inválido. Por favor, informe os *11 dígitos* do seu CPF (apenas números):');
+                    return;
+                }
                 let conn;
                 try {
                     conn = await getOracleConnection();
-                    const telNacional = phone.replace(/^55/, '');
-                    await conn.execute(
-                        `UPDATE DIZIMISTAS SET TELEFONE = :tel WHERE ID_DIZIMISTA = :id`,
-                        { tel: telNacional, id: state.idDizimista }
+                    const resCPF = await conn.execute(
+                        `SELECT ID_DIZIMISTA, NOME, TELEFONE FROM DIZIMISTAS WHERE REGEXP_REPLACE(CPF,'[^0-9]','') = :cpf AND STATUS = 1`,
+                        { cpf: cpfDigitado }
                     );
-                    console.log(`[CADASTRO] Telefone atualizado para o dizimista ID ${state.idDizimista}`);
-                    // Invalida cache de contatos
-                    dizimistasContactCache = null;
+                    if (resCPF.rows.length > 0) {
+                        const diz = resCPF.rows[0];
+                        const telAtual = diz.TELEFONE ? diz.TELEFONE.replace(/\D/g, '') : '';
+                        userStates[phone] = {
+                            flowId: 'cadastro_confirmar_telefone',
+                            idDizimista: diz.ID_DIZIMISTA,
+                            nomeDizimista: diz.NOME
+                        };
+                        await msg.reply(
+                            `✅ Encontramos um cadastro para o CPF informado!\n\n` +
+                            `*Nome:* ${diz.NOME}\n` +
+                            `*Telefone cadastrado:* ${telAtual || 'não informado'}\n\n` +
+                            `Deseja atualizar o telefone cadastrado para o número atual que está sendo usado?\n\n` +
+                            `Digite *S* para confirmar ou *N* para cancelar.`
+                        );
+                    } else {
+                        // CPF não encontrado → valida dígitos antes de abrir cadastro
+                        if (!validarCPF(cpfDigitado)) {
+                            await msg.reply(
+                                `❌ O CPF *${cpfDigitado}* é inválido (dígitos verificadores incorretos).\n\n` +
+                                `Por favor, verifique o número e informe novamente o seu *CPF* (apenas 11 dígitos):`
+                            );
+                            // Mantém o flowId 'cadastro_cpf' para nova tentativa
+                            return;
+                        }
+                        // CPF válido e não cadastrado → inicia cadastro completo
+                        userStates[phone] = { flowId: 'cadastro_nome', cpf: cpfDigitado };
+                        await msg.reply(
+                            `Não encontramos nenhum cadastro com esse CPF.\n\n` +
+                            `Vamos criar seu cadastro! 📝\n\n` +
+                            `Por favor, informe seu *Nome Completo*:`
+                        );
+                    }
+                } catch (err) {
+                    console.error('[CADASTRO] Erro ao buscar CPF:', err);
+                    await msg.reply('Ocorreu um erro ao buscar o CPF. Tente novamente mais tarde.');
+                    delete userStates[phone];
+                } finally {
+                    if (conn) await conn.close();
+                }
 
-                    const mainFlow = chatFlows['main_menu'];
-                    const hour = new Date().getHours();
-                    let saudacao = 'Boa noite';
-                    if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
-                    else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+            } else if (state.flowId === 'cadastro_confirmar_telefone') {
+                // ── Etapa: Usuário responde S/N para atualizar telefone ──
+                const resposta = text.toLowerCase().trim();
+                if (resposta === 's' || resposta === 'sim') {
+                    let conn;
+                    try {
+                        conn = await getOracleConnection();
+                        const telNacional = phone.replace(/^55/, '');
+                        await conn.execute(
+                            `UPDATE DIZIMISTAS SET TELEFONE = :tel WHERE ID_DIZIMISTA = :id`,
+                            { tel: telNacional, id: state.idDizimista }
+                        );
+                        console.log(`[CADASTRO] Telefone atualizado para o dizimista ID ${state.idDizimista}`);
+                        // Invalida cache de contatos
+                        dizimistasContactCache = null;
 
+                        const mainFlow = chatFlows['main_menu'];
+                        const hour = new Date().getHours();
+                        let saudacao = 'Boa noite';
+                        if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
+                        else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+
+                        await msg.reply(
+                            `✅ Telefone atualizado com sucesso! ${saudacao}, *${state.nomeDizimista}*! 🙏\n\n` +
+                            (mainFlow ? mainFlow.message : 'Cadastro vinculado. Use *menu* para ver as opções.')
+                        );
+                        userStates[phone] = {
+                            flowId: 'main_menu',
+                            idDizimista: state.idDizimista,
+                            nomeDizimista: state.nomeDizimista,
+                            apelidoDizimista: state.nomeDizimista
+                        };
+                    } catch (err) {
+                        console.error('[CADASTRO] Erro ao atualizar telefone:', err);
+                        await msg.reply('Houve um erro ao atualizar o telefone. Tente novamente mais tarde.');
+                        delete userStates[phone];
+                    } finally {
+                        if (conn) await conn.close();
+                    }
+                } else if (resposta === 'n' || resposta === 'nao' || resposta === 'não') {
+                    delete userStates[phone];
                     await msg.reply(
-                        `✅ Telefone atualizado com sucesso! ${saudacao}, *${state.nomeDizimista}*! 🙏\n\n` +
-                        (mainFlow ? mainFlow.message : 'Cadastro vinculado. Use *menu* para ver as opções.')
+                        `Tudo bem! Para atualizar o telefone no seu cadastro, por favor entre em contato com o coordenador responsável.\n\n` +
+                        `📞 Você pode tentar novamente digitando qualquer mensagem após a atualização do seu cadastro.`
                     );
+                } else {
+                    await msg.reply('Por favor, responda apenas *S* (sim) ou *N* (não).');
+                }
+
+            } else if (state.flowId === 'cadastro_nome') {
+                // ── Etapa 1: Nome Completo ──
+                const nomeTrimmed = msg.body.trim();
+                if (nomeTrimmed.split(/\s+/).length < 2) {
+                    await msg.reply('Por favor, informe seu *Nome Completo* (com ao menos nome e sobrenome):');
+                    return;
+                }
+                userStates[phone].nome = nomeTrimmed;
+                userStates[phone].flowId = 'cadastro_cpf_novo';
+                // Verifica se o CPF já foi capturado na etapa anterior (re-uso do dado)
+                if (userStates[phone].cpf) {
+                    // CPF já coletado, pula para e-mail
+                    userStates[phone].flowId = 'cadastro_email';
+                    await msg.reply(`Ótimo, *${nomeTrimmed.split(' ')[0]}*! 😊\n\nAgora informe seu *e-mail*:`);
+                } else {
+                    await msg.reply(`Ótimo, *${nomeTrimmed.split(' ')[0]}*! 😊\n\nAgora informe seu *CPF* (apenas números):`);
+                }
+
+            } else if (state.flowId === 'cadastro_cpf_novo') {
+                // ── Etapa 2: CPF com validação completa ──
+                const cpfDigitado = msg.body.replace(/\D/g, '');
+                if (!validarCPF(cpfDigitado)) {
+                    await msg.reply(
+                        '❌ CPF inválido! Por favor, verifique os números e tente novamente.\n\n' +
+                        'Informe seu *CPF* (apenas os 11 dígitos):'
+                    );
+                    return;
+                }
+                userStates[phone].cpf = cpfDigitado;
+                userStates[phone].flowId = 'cadastro_email';
+                await msg.reply('CPF validado! ✅\n\nAgora informe seu *e-mail*:');
+
+            } else if (state.flowId === 'cadastro_email') {
+                // ── Etapa 3: E-mail ──
+                const email = msg.body.trim();
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                    await msg.reply('E-mail inválido. Por favor, informe um *e-mail* válido (ex: joao@gmail.com):');
+                    return;
+                }
+                userStates[phone].email = email;
+                userStates[phone].flowId = 'cadastro_cep';
+                await msg.reply('E-mail registrado! ✅\n\nAgora informe seu *CEP* (apenas números):');
+
+            } else if (state.flowId === 'cadastro_cep') {
+                // ── Etapa 4: CEP ──
+                const cep = msg.body.replace(/\D/g, '');
+                if (cep.length !== 8) {
+                    await msg.reply('CEP inválido. Por favor, informe os *8 dígitos* do seu CEP (apenas números):');
+                    return;
+                }
+                userStates[phone].cep = cep;
+                userStates[phone].flowId = 'cadastro_endereco';
+                await msg.reply('CEP registrado! ✅\n\nAgora informe seu *Endereço completo* (Rua, número, bairro):');
+
+            } else if (state.flowId === 'cadastro_endereco') {
+                // ── Etapa 5: Endereço ──
+                const endereco = msg.body.trim();
+                if (endereco.length < 5) {
+                    await msg.reply('Endereço muito curto. Por favor, informe o *Endereço completo* (Rua, número, bairro):');
+                    return;
+                }
+                userStates[phone].endereco = endereco;
+                userStates[phone].flowId = 'cadastro_nascimento';
+                await msg.reply('Endereço registrado! ✅\n\nPor último, informe sua *Data de Nascimento* no formato *DD/MM/AAAA*:');
+
+            } else if (state.flowId === 'cadastro_nascimento') {
+                // ── Etapa 6: Data de Nascimento ──
+                const dataNasc = msg.body.trim();
+                if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dataNasc)) {
+                    await msg.reply('Data inválida. Por favor, informe no formato *DD/MM/AAAA* (ex: 25/04/1990):');
+                    return;
+                }
+                // Valida se é uma data real
+                const [dd, mm, yyyy] = dataNasc.split('/').map(Number);
+                const dataObj = new Date(yyyy, mm - 1, dd);
+                if (dataObj.getFullYear() !== yyyy || dataObj.getMonth() !== mm - 1 || dataObj.getDate() !== dd) {
+                    await msg.reply('Data inexistente. Por favor, informe uma *Data de Nascimento* válida (ex: 25/04/1990):');
+                    return;
+                }
+                userStates[phone].nascimento = dataNasc;
+                // Informa que está processando
+                await msg.reply('Perfeito! ✨ Aguarde um momento, estamos finalizando seu cadastro...');
+                await finalizarCadastro(msg, phone);
+
+            } else if (state.flowId === 'pastoral_participar') {
+                // ── Pergunta se participa de pastoral ──
+                const resposta = text.toLowerCase().trim();
+                if (resposta === 's' || resposta === 'sim') {
+                    // Lista as pastorais cadastradas
+                    let conn;
+                    try {
+                        conn = await getOracleConnection();
+                        const resPast = await conn.execute(
+                            `SELECT ID_PASTORAL, NOME, AUTOCADASTRO FROM PASTORAIS WHERE STATUS = 1 ORDER BY NOME ASC`
+                        );
+                        if (resPast.rows.length === 0) {
+                            await msg.reply(
+                                'No momento não há pastorais cadastradas no sistema.\n\n' +
+                                'Por favor, entre em contato com a secretaria para regularizar seu cadastro.'
+                            );
+                            // Vai ao menu mesmo sem pastoral
+                            const mainFlow = chatFlows['main_menu'];
+                            if (mainFlow) {
+                                userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                                await msg.reply(mainFlow.message);
+                            }
+                            return;
+                        }
+
+                        userStates[phone] = {
+                            flowId: 'pastoral_selecao',
+                            idDizimista: state.idDizimista,
+                            nomeDizimista: state.nomeDizimista,
+                            apelidoDizimista: state.apelidoDizimista,
+                            pastoraisDisponiveis: resPast.rows
+                        };
+
+                        let resp = `*Pastorais da Paróquia* 🙏\n\nEscolha o *número* da pastoral em que você participa:\n\n`;
+                        resPast.rows.forEach((p, idx) => {
+                            const icone = p.AUTOCADASTRO === 1 ? '✅' : '💬';
+                            resp += `*${idx + 1}* — ${p.NOME} ${icone}\n`;
+                        });
+                        resp += `\n✅ Entrada imediata  |  💬 Sujeito a aprovação do coordenador\n\n*0* — Não participo de nenhuma`;
+                        await msg.reply(resp);
+
+                    } catch (err) {
+                        console.error('[PASTORAL] Erro ao listar pastorais:', err);
+                        await msg.reply('Erro ao buscar pastorais. Tente novamente mais tarde.');
+                    } finally {
+                        if (conn) await conn.close();
+                    }
+                } else if (resposta === 'n' || resposta === 'nao' || resposta === 'não') {
+                    // Não participa → vai ao menu principal
+                    const mainFlow = chatFlows['main_menu'];
+                    userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                    await msg.reply(
+                        'Tudo bem! Quando quiser se vincular a uma pastoral, fale com o coordenador.\n\n' +
+                        (mainFlow ? mainFlow.message : '_Digite *menu* para ver as opções._')
+                    );
+                } else {
+                    await msg.reply('Por favor, responda apenas *S* (sim) ou *N* (não).');
+                }
+
+            } else if (state.flowId === 'pastoral_selecao') {
+                // ── Usuário escolheu uma pastoral da lista ──
+                if (text === '0') {
+                    // Não participa de nenhuma → menu
+                    const mainFlow = chatFlows['main_menu'];
+                    userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                    await msg.reply(
+                        'Entendido! Quando precisar, fale com o coordenador para se vincular a uma pastoral.\n\n' +
+                        (mainFlow ? mainFlow.message : '_Digite *menu* para ver as opções._')
+                    );
+                    return;
+                }
+
+                const idx = parseInt(text) - 1;
+                const pastorais = state.pastoraisDisponiveis;
+                if (isNaN(idx) || !pastorais || !pastorais[idx]) {
+                    await msg.reply(`Opção inválida. Por favor, escolha um número entre *1* e *${pastorais ? pastorais.length : '?'}*, ou *0* para sair.`);
+                    return;
+                }
+
+                const pastoralEscolhida = pastorais[idx];
+                const idPastoral = pastoralEscolhida.ID_PASTORAL;
+                const nomePastoral = pastoralEscolhida.NOME;
+                const autocadastro = pastoralEscolhida.AUTOCADASTRO;
+                const nomeServo = state.apelidoDizimista || state.nomeDizimista;
+
+                let conn;
+                try {
+                    conn = await getOracleConnection();
+
+                    if (autocadastro === 1) {
+                        // --- AUTOCADASTRO: insere diretamente ---
+                        // Verifica se já existe (segurança)
+                        const jaExiste = await conn.execute(
+                            `SELECT 1 FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :d AND ID_PASTORAL = :p`,
+                            { d: state.idDizimista, p: idPastoral }
+                        );
+                        if (jaExiste.rows.length === 0) {
+                            await conn.execute(
+                                `INSERT INTO DIZIMISTA_PASTORAL (ID_DIZIMISTA, ID_PASTORAL, PAPEL) VALUES (:d, :p, 'M')`,
+                                { d: state.idDizimista, p: idPastoral }
+                            );
+                        }
+                        // Notifica coordenadores que o servo se cadastrou
+                        const resCoord = await conn.execute(
+                            `SELECT d.TELEFONE FROM DIZIMISTA_PASTORAL dp
+                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+                         WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'`,
+                            { p: idPastoral }
+                        );
+                        for (const coord of resCoord.rows) {
+                            if (coord.TELEFONE) {
+                                await conn.execute(
+                                    `INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) VALUES (:tel, :txt, 0)`,
+                                    {
+                                        tel: coord.TELEFONE,
+                                        txt: `🟢 O servo *${nomeServo}* se cadastrou na pastoral *${nomePastoral}* pelo chatbot.`
+                                    }
+                                );
+                            }
+                        }
+                        await msg.reply(
+                            `✅ Você foi cadastrado(a) com sucesso na pastoral *${nomePastoral}*! 🙏\n\n` +
+                            `O coordenador foi notificado.`
+                        );
+                        console.log(`[PASTORAL] ${nomeServo} cadastrado na pastoral "${nomePastoral}" (autocadastro).`);
+                    } else {
+                        // --- SEM AUTOCADASTRO: apenas envia solicitação ao coordenador ---
+                        const resCoord = await conn.execute(
+                            `SELECT d.TELEFONE FROM DIZIMISTA_PASTORAL dp
+                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+                         WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C' AND d.STATUS = 1`,
+                            { p: idPastoral }
+                        );
+                        for (const coord of resCoord.rows) {
+                            if (coord.TELEFONE) {
+                                await conn.execute(
+                                    `INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) VALUES (:tel, :txt, 0)`,
+                                    {
+                                        tel: coord.TELEFONE,
+                                        txt: `🟡 O servo *${nomeServo}* solicita inclusão na pastoral *${nomePastoral}* via chatbot. Por favor, verifique e aprove no sistema.`
+                                    }
+                                );
+                            }
+                        }
+                        await msg.reply(
+                            `💬 Sua solicitação de ingresso na pastoral *${nomePastoral}* foi enviada ao coordenador! 🙏\n\n` +
+                            `Aguarde o contato do coordenador para confirmação da sua inclusão.`
+                        );
+                        console.log(`[PASTORAL] ${nomeServo} solicitou inclusão na pastoral "${nomePastoral}" (sujeito a aprovação).`);
+                    }
+
+                    // Volta ao menu principal
+                    await new Promise(r => setTimeout(r, 1500));
+                    const mainFlow = chatFlows['main_menu'];
+                    userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                    if (mainFlow) await msg.reply(mainFlow.message);
+
+                } catch (err) {
+                    console.error('[PASTORAL] Erro ao processar seleção de pastoral:', err);
+                    await msg.reply('Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.');
+                } finally {
+                    if (conn) await conn.close();
+                }
+
+            } else {
+                // Fallback para qualquer outra coisa: volta ao menu principal preservando ID
+                const mainFlow = chatFlows['main_menu'];
+                if (mainFlow) {
+                    await msg.reply(mainFlow.message);
                     userStates[phone] = {
                         flowId: 'main_menu',
                         idDizimista: state.idDizimista,
                         nomeDizimista: state.nomeDizimista,
-                        apelidoDizimista: state.nomeDizimista
+                        apelidoDizimista: state.apelidoDizimista
                     };
-                } catch (err) {
-                    console.error('[CADASTRO] Erro ao atualizar telefone:', err);
-                    await msg.reply('Houve um erro ao atualizar o telefone. Tente novamente mais tarde.');
-                    delete userStates[phone];
-                } finally {
-                    if (conn) await conn.close();
                 }
-            } else if (resposta === 'n' || resposta === 'nao' || resposta === 'não') {
-                delete userStates[phone];
-                await msg.reply(
-                    `Tudo bem! Para atualizar o telefone no seu cadastro, por favor entre em contato com o coordenador responsável.\n\n` +
-                    `📞 Você pode tentar novamente digitando qualquer mensagem após a atualização do seu cadastro.`
-                );
-            } else {
-                await msg.reply('Por favor, responda apenas *S* (sim) ou *N* (não).');
             }
-
-        } else if (state.flowId === 'cadastro_nome') {
-            // ── Etapa 1: Nome Completo ──
-            const nomeTrimmed = msg.body.trim();
-            if (nomeTrimmed.split(/\s+/).length < 2) {
-                await msg.reply('Por favor, informe seu *Nome Completo* (com ao menos nome e sobrenome):');
-                return;
-            }
-            userStates[phone].nome = nomeTrimmed;
-            userStates[phone].flowId = 'cadastro_cpf_novo';
-            // Verifica se o CPF já foi capturado na etapa anterior (re-uso do dado)
-            if (userStates[phone].cpf) {
-                // CPF já coletado, pula para e-mail
-                userStates[phone].flowId = 'cadastro_email';
-                await msg.reply(`Ótimo, *${nomeTrimmed.split(' ')[0]}*! 😊\n\nAgora informe seu *e-mail*:`);
-            } else {
-                await msg.reply(`Ótimo, *${nomeTrimmed.split(' ')[0]}*! 😊\n\nAgora informe seu *CPF* (apenas números):`);
-            }
-
-        } else if (state.flowId === 'cadastro_cpf_novo') {
-            // ── Etapa 2: CPF com validação completa ──
-            const cpfDigitado = msg.body.replace(/\D/g, '');
-            if (!validarCPF(cpfDigitado)) {
-                await msg.reply(
-                    '❌ CPF inválido! Por favor, verifique os números e tente novamente.\n\n' +
-                    'Informe seu *CPF* (apenas os 11 dígitos):'
-                );
-                return;
-            }
-            userStates[phone].cpf = cpfDigitado;
-            userStates[phone].flowId = 'cadastro_email';
-            await msg.reply('CPF validado! ✅\n\nAgora informe seu *e-mail*:');
-
-        } else if (state.flowId === 'cadastro_email') {
-            // ── Etapa 3: E-mail ──
-            const email = msg.body.trim();
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                await msg.reply('E-mail inválido. Por favor, informe um *e-mail* válido (ex: joao@gmail.com):');
-                return;
-            }
-            userStates[phone].email = email;
-            userStates[phone].flowId = 'cadastro_cep';
-            await msg.reply('E-mail registrado! ✅\n\nAgora informe seu *CEP* (apenas números):');
-
-        } else if (state.flowId === 'cadastro_cep') {
-            // ── Etapa 4: CEP ──
-            const cep = msg.body.replace(/\D/g, '');
-            if (cep.length !== 8) {
-                await msg.reply('CEP inválido. Por favor, informe os *8 dígitos* do seu CEP (apenas números):');
-                return;
-            }
-            userStates[phone].cep = cep;
-            userStates[phone].flowId = 'cadastro_endereco';
-            await msg.reply('CEP registrado! ✅\n\nAgora informe seu *Endereço completo* (Rua, número, bairro):');
-
-        } else if (state.flowId === 'cadastro_endereco') {
-            // ── Etapa 5: Endereço ──
-            const endereco = msg.body.trim();
-            if (endereco.length < 5) {
-                await msg.reply('Endereço muito curto. Por favor, informe o *Endereço completo* (Rua, número, bairro):');
-                return;
-            }
-            userStates[phone].endereco = endereco;
-            userStates[phone].flowId = 'cadastro_nascimento';
-            await msg.reply('Endereço registrado! ✅\n\nPor último, informe sua *Data de Nascimento* no formato *DD/MM/AAAA*:');
-
-        } else if (state.flowId === 'cadastro_nascimento') {
-            // ── Etapa 6: Data de Nascimento ──
-            const dataNasc = msg.body.trim();
-            if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dataNasc)) {
-                await msg.reply('Data inválida. Por favor, informe no formato *DD/MM/AAAA* (ex: 25/04/1990):');
-                return;
-            }
-            // Valida se é uma data real
-            const [dd, mm, yyyy] = dataNasc.split('/').map(Number);
-            const dataObj = new Date(yyyy, mm - 1, dd);
-            if (dataObj.getFullYear() !== yyyy || dataObj.getMonth() !== mm - 1 || dataObj.getDate() !== dd) {
-                await msg.reply('Data inexistente. Por favor, informe uma *Data de Nascimento* válida (ex: 25/04/1990):');
-                return;
-            }
-            userStates[phone].nascimento = dataNasc;
-            // Informa que está processando
-            await msg.reply('Perfeito! ✨ Aguarde um momento, estamos finalizando seu cadastro...');
-            await finalizarCadastro(msg, phone);
-
-        } else if (state.flowId === 'pastoral_participar') {
-            // ── Pergunta se participa de pastoral ──
-            const resposta = text.toLowerCase().trim();
-            if (resposta === 's' || resposta === 'sim') {
-                // Lista as pastorais cadastradas
-                let conn;
-                try {
-                    conn = await getOracleConnection();
-                    const resPast = await conn.execute(
-                        `SELECT ID_PASTORAL, NOME, AUTOCADASTRO FROM PASTORAIS WHERE STATUS = 1 ORDER BY NOME ASC`
-                    );
-                    if (resPast.rows.length === 0) {
-                        await msg.reply(
-                            'No momento não há pastorais cadastradas no sistema.\n\n' +
-                            'Por favor, entre em contato com a secretaria para regularizar seu cadastro.'
-                        );
-                        // Vai ao menu mesmo sem pastoral
-                        const mainFlow = chatFlows['main_menu'];
-                        if (mainFlow) {
-                            userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
-                            await msg.reply(mainFlow.message);
-                        }
-                        return;
-                    }
-
-                    userStates[phone] = {
-                        flowId: 'pastoral_selecao',
-                        idDizimista: state.idDizimista,
-                        nomeDizimista: state.nomeDizimista,
-                        apelidoDizimista: state.apelidoDizimista,
-                        pastoraisDisponiveis: resPast.rows
-                    };
-
-                    let resp = `*Pastorais da Paróquia* 🙏\n\nEscolha o *número* da pastoral em que você participa:\n\n`;
-                    resPast.rows.forEach((p, idx) => {
-                        const icone = p.AUTOCADASTRO === 1 ? '✅' : '💬';
-                        resp += `*${idx + 1}* — ${p.NOME} ${icone}\n`;
-                    });
-                    resp += `\n✅ Entrada imediata  |  💬 Sujeito a aprovação do coordenador\n\n*0* — Não participo de nenhuma`;
-                    await msg.reply(resp);
-
-                } catch (err) {
-                    console.error('[PASTORAL] Erro ao listar pastorais:', err);
-                    await msg.reply('Erro ao buscar pastorais. Tente novamente mais tarde.');
-                } finally {
-                    if (conn) await conn.close();
-                }
-            } else if (resposta === 'n' || resposta === 'nao' || resposta === 'não') {
-                // Não participa → vai ao menu principal
-                const mainFlow = chatFlows['main_menu'];
-                userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
-                await msg.reply(
-                    'Tudo bem! Quando quiser se vincular a uma pastoral, fale com o coordenador.\n\n' +
-                    (mainFlow ? mainFlow.message : '_Digite *menu* para ver as opções._')
-                );
-            } else {
-                await msg.reply('Por favor, responda apenas *S* (sim) ou *N* (não).');
-            }
-
-        } else if (state.flowId === 'pastoral_selecao') {
-            // ── Usuário escolheu uma pastoral da lista ──
-            if (text === '0') {
-                // Não participa de nenhuma → menu
-                const mainFlow = chatFlows['main_menu'];
-                userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
-                await msg.reply(
-                    'Entendido! Quando precisar, fale com o coordenador para se vincular a uma pastoral.\n\n' +
-                    (mainFlow ? mainFlow.message : '_Digite *menu* para ver as opções._')
-                );
-                return;
-            }
-
-            const idx = parseInt(text) - 1;
-            const pastorais = state.pastoraisDisponiveis;
-            if (isNaN(idx) || !pastorais || !pastorais[idx]) {
-                await msg.reply(`Opção inválida. Por favor, escolha um número entre *1* e *${pastorais ? pastorais.length : '?'}*, ou *0* para sair.`);
-                return;
-            }
-
-            const pastoralEscolhida = pastorais[idx];
-            const idPastoral = pastoralEscolhida.ID_PASTORAL;
-            const nomePastoral = pastoralEscolhida.NOME;
-            const autocadastro = pastoralEscolhida.AUTOCADASTRO;
-            const nomeServo = state.apelidoDizimista || state.nomeDizimista;
-
-            let conn;
-            try {
-                conn = await getOracleConnection();
-
-                if (autocadastro === 1) {
-                    // --- AUTOCADASTRO: insere diretamente ---
-                    // Verifica se já existe (segurança)
-                    const jaExiste = await conn.execute(
-                        `SELECT 1 FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :d AND ID_PASTORAL = :p`,
-                        { d: state.idDizimista, p: idPastoral }
-                    );
-                    if (jaExiste.rows.length === 0) {
-                        await conn.execute(
-                            `INSERT INTO DIZIMISTA_PASTORAL (ID_DIZIMISTA, ID_PASTORAL, PAPEL) VALUES (:d, :p, 'M')`,
-                            { d: state.idDizimista, p: idPastoral }
-                        );
-                    }
-                    // Notifica coordenadores que o servo se cadastrou
-                    const resCoord = await conn.execute(
-                        `SELECT d.TELEFONE FROM DIZIMISTA_PASTORAL dp
-                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
-                         WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'`,
-                        { p: idPastoral }
-                    );
-                    for (const coord of resCoord.rows) {
-                        if (coord.TELEFONE) {
-                            await conn.execute(
-                                `INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) VALUES (:tel, :txt, 0)`,
-                                {
-                                    tel: coord.TELEFONE,
-                                    txt: `🟢 O servo *${nomeServo}* se cadastrou na pastoral *${nomePastoral}* pelo chatbot.`
-                                }
-                            );
-                        }
-                    }
-                    await msg.reply(
-                        `✅ Você foi cadastrado(a) com sucesso na pastoral *${nomePastoral}*! 🙏\n\n` +
-                        `O coordenador foi notificado.`
-                    );
-                    console.log(`[PASTORAL] ${nomeServo} cadastrado na pastoral "${nomePastoral}" (autocadastro).`);
-                } else {
-                    // --- SEM AUTOCADASTRO: apenas envia solicitação ao coordenador ---
-                    const resCoord = await conn.execute(
-                        `SELECT d.TELEFONE FROM DIZIMISTA_PASTORAL dp
-                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
-                         WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'`,
-                        { p: idPastoral }
-                    );
-                    for (const coord of resCoord.rows) {
-                        if (coord.TELEFONE) {
-                            await conn.execute(
-                                `INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) VALUES (:tel, :txt, 0)`,
-                                {
-                                    tel: coord.TELEFONE,
-                                    txt: `🟡 O servo *${nomeServo}* solicita inclusão na pastoral *${nomePastoral}* via chatbot. Por favor, verifique e aprove no sistema.`
-                                }
-                            );
-                        }
-                    }
-                    await msg.reply(
-                        `💬 Sua solicitação de ingresso na pastoral *${nomePastoral}* foi enviada ao coordenador! 🙏\n\n` +
-                        `Aguarde o contato do coordenador para confirmação da sua inclusão.`
-                    );
-                    console.log(`[PASTORAL] ${nomeServo} solicitou inclusão na pastoral "${nomePastoral}" (sujeito a aprovação).`);
-                }
-
-                // Volta ao menu principal
-                await new Promise(r => setTimeout(r, 1500));
-                const mainFlow = chatFlows['main_menu'];
-                userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
-                if (mainFlow) await msg.reply(mainFlow.message);
-
-            } catch (err) {
-                console.error('[PASTORAL] Erro ao processar seleção de pastoral:', err);
-                await msg.reply('Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.');
-            } finally {
-                if (conn) await conn.close();
-            }
-
-        } else {
-            // Fallback para qualquer outra coisa: volta ao menu principal preservando ID
-            const mainFlow = chatFlows['main_menu'];
-            if (mainFlow) {
-                await msg.reply(mainFlow.message);
-                userStates[phone] = { 
-                    flowId: 'main_menu',
-                    idDizimista: state.idDizimista,
-                    nomeDizimista: state.nomeDizimista,
-                    apelidoDizimista: state.apelidoDizimista
-                };
-            }
-        }
         } catch (handlerErr) {
             console.error(`[MSG-HANDLER] Erro não tratado para ${phone}:`, handlerErr);
         } finally {
@@ -1681,7 +1686,7 @@ io.on('connection', (socket) => {
         console.log('[WWEB] Inicialização manual solicitada via painel.');
         isInitializing = true;
         socket.emit('message', 'Iniciando navegador... Isso pode levar até 1 minuto em servidores lentos.');
-        
+
         // Timeout de emergência: 2 minutos
         const initTimeout = setTimeout(() => {
             if (isInitializing) {
@@ -1720,9 +1725,9 @@ io.on('connection', (socket) => {
 
             const chatData = chats.slice(0, 20).map(c => {
                 const phoneOnly = c.id.user || '';
-                const formatName = dbContacts[phoneOnly] 
-                                    ? `[D] ${dbContacts[phoneOnly]}` 
-                                    : (c.name || phoneOnly || 'Desconhecido');
+                const formatName = dbContacts[phoneOnly]
+                    ? `[D] ${dbContacts[phoneOnly]}`
+                    : (c.name || phoneOnly || 'Desconhecido');
                 return {
                     id: c.id._serialized,
                     name: formatName,
@@ -1748,7 +1753,7 @@ io.on('connection', (socket) => {
             socket.emit('history', { chatId, messages: msgData });
         } catch (err) {
             console.error('Error fetching history:', err);
-            
+
             let cached = messageCache[chatId] || [];
             if (cached.length === 0) {
                 cached = [{
@@ -1809,10 +1814,10 @@ const CHECK_INTERVAL_MINUTES = 10; // Configurável
 
 function startMessageRoutine() {
     if (messageIntervalFunc) clearInterval(messageIntervalFunc);
-    
+
     // Roda a cada X minutos (convertido para milissegundos)
     const intervalMs = CHECK_INTERVAL_MINUTES * 60 * 1000;
-    
+
     // Roda a rotina pela primeira vez em 30 segundos após estar pronto
     setTimeout(execMessageRoutine, 30000);
     messageIntervalFunc = setInterval(execMessageRoutine, intervalMs);
@@ -1828,12 +1833,12 @@ async function execMessageRoutine() {
         console.log('[ROUTINE] Skipped — Rotina já em execução (evitando concorrência).');
         return;
     }
-    
+
     isRoutineRunning = true;
     let conn;
     try {
         conn = await getOracleConnection();
-        
+
         // Busca mensagens pendentes
         const result = await conn.execute(`
             SELECT ID_MENSAGENS, TELEFONE, TEXTO 
@@ -1841,31 +1846,31 @@ async function execMessageRoutine() {
             WHERE STATUS = 0
             ORDER BY ID_MENSAGENS ASC
         `);
-        
+
         if (result.rows.length === 0) {
             console.log('[ROUTINE] Nenhuma mensagem pendente.');
             return;
         }
-        
+
         console.log(`[ROUTINE] Encontradas ${result.rows.length} mensagens pendentes para envio.`);
-        
+
         for (const row of result.rows) {
             // Verifica se o cliente ainda está ativo antes de cada envio
             if (!isReady) {
                 console.log('[ROUTINE] WhatsApp desconectou durante a rotina. Abortando.');
                 break;
             }
-            
+
             try {
                 let idMsg = row.ID_MENSAGENS;
                 let phone = row.TELEFONE;
                 let text = row.TEXTO;
-                
+
                 if (!phone || !text) {
                     await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Telefone ou Texto vazio' WHERE ID_MENSAGENS = :id`, { id: idMsg });
                     continue;
                 }
-                
+
                 // Limpa e formata o telefone
                 const cleanPhone = phone.replace(/\D/g, '');
                 if (cleanPhone.length < 10) {
@@ -1885,12 +1890,12 @@ async function execMessageRoutine() {
                     await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = :ret WHERE ID_MENSAGENS = :id`, { ret: 'Falha: Timeout ao verificar número', id: idMsg });
                     continue;
                 }
-                
+
                 if (numberDetails) {
                     const targetId = numberDetails._serialized;
                     await client.sendMessage(targetId, text);
                     console.log(`[ROUTINE] Mensagem ID ${idMsg} enviada com sucesso para ${phone}.`);
-                    
+
                     // Atualiza STATUS para 1
                     await conn.execute(`
                         UPDATE MENSAGENS 
@@ -1906,7 +1911,7 @@ async function execMessageRoutine() {
                 let erroMsg = sendErr.message ? sendErr.message.substring(0, 950) : "Erro desconhecido";
                 await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = :ret WHERE ID_MENSAGENS = :id`, { ret: 'Exception: ' + erroMsg, id: row.ID_MENSAGENS });
             }
-            
+
             // Pausa de 5 segundos entre cada disparo para evitar banimento do WhatsApp
             await new Promise(res => setTimeout(res, 5000));
         }
