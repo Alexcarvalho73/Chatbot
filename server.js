@@ -1248,7 +1248,7 @@ client.on('message_create', async msg => {
                         // 1. Verificar permissão (Coordenador ou Usuário do Sistema)
                         const resPerm = await conn.execute(`
                             SELECT 1 FROM (
-                                SELECT PAPEL FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :id AND PAPEL = 'C'
+                                SELECT 1 FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :id AND PAPEL = 'C'
                                 UNION
                                 SELECT 1 FROM USUARIOS WHERE ID_DIZIMISTA = :id
                             ) WHERE ROWNUM = 1
