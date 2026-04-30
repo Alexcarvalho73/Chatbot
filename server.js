@@ -1355,12 +1355,12 @@ client.on('message_create', async msg => {
                     // 2. Gravar Log de Auditoria
                     await conn.execute(`
                         INSERT INTO AUDITORIA (TABELA, ID_REGISTRO, OPERACAO, USUARIO, DATA_HORA, DADOS_ANTERIORES, DADOS_NOVOS)
-                        VALUES ('MISSAS', :id, 'UPDATE_CELEBRANTE', :user, SYSDATE, :old, :new)
+                        VALUES ('MISSAS', :idreg, 'UPDATE_CELEBRANTE', :username, SYSDATE, :dold, :dnew)
                     `, {
-                        id: mass.ID_MISSA,
-                        user: state.nomeDizimista,
-                        old: JSON.stringify({ celebrante: mass.CELEBRANTE }),
-                        new: JSON.stringify({ celebrante: novoCelebrante })
+                        idreg: mass.ID_MISSA,
+                        username: state.nomeDizimista,
+                        dold: JSON.stringify({ celebrante: mass.CELEBRANTE }),
+                        dnew: JSON.stringify({ celebrante: novoCelebrante })
                     });
 
                     await msg.reply(`✅ Celebrante atualizado com sucesso para: *${novoCelebrante}*!`);
