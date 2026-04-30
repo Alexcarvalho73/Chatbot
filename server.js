@@ -301,7 +301,7 @@ const internalFunctions = {
             if (conn) await conn.close();
         }
     },
-    listarMissas: async (msg, contact) => {
+    listarMissas: async (msg, contact, userData) => {
         const phone = contact.number;
         let conn;
         try {
