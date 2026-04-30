@@ -280,7 +280,11 @@ const internalFunctions = {
         try {
             conn = await getOracleConnection();
             const resDiz = await conn.execute(`
-                SELECT d.ID_DIZIMISTA, d.NOME, d.APELIDO, u.ID_PERFIL 
+                SELECT d.ID_DIZIMISTA, d.NOME, d.APELIDO, u.ID_PERFIL,
+                       (SELECT 1 FROM DIZIMISTA_PASTORAL dp 
+                        JOIN PASTORAIS p ON dp.ID_PASTORAL = p.ID_PASTORAL
+                        WHERE dp.ID_DIZIMISTA = d.ID_DIZIMISTA 
+                        AND UPPER(p.NOME) LIKE '%PADRE%' AND ROWNUM = 1) as IS_PADRE
                 FROM DIZIMISTAS d
                 LEFT JOIN USUARIOS u ON d.ID_DIZIMISTA = u.ID_DIZIMISTA
                 WHERE REGEXP_REPLACE(d.TELEFONE, '[^0-9]', '') LIKE :phone
@@ -289,8 +293,14 @@ const internalFunctions = {
 
             if (resDiz.rows.length > 0) {
                 const r = resDiz.rows[0];
-                console.log(`[ID] Dizimista localizado: ${r.NOME} (ID: ${r.ID_DIZIMISTA}, Perfil: ${r.ID_PERFIL})`);
-                return { id: r.ID_DIZIMISTA, nome: r.NOME, apelido: r.APELIDO || r.NOME, idPerfil: r.ID_PERFIL };
+                console.log(`[ID] Dizimista localizado: ${r.NOME} (ID: ${r.ID_DIZIMISTA}, Perfil: ${r.ID_PERFIL}, IsPadre: ${r.IS_PADRE})`);
+                return { 
+                    id: r.ID_DIZIMISTA, 
+                    nome: r.NOME, 
+                    apelido: r.APELIDO || r.NOME, 
+                    idPerfil: r.ID_PERFIL,
+                    isPadre: r.IS_PADRE === 1
+                };
             }
             console.log(`[ID] Nenhum dizimista encontrado para o telefone: ${cleanPhone}`);
             return null;
@@ -334,7 +344,7 @@ const internalFunctions = {
             response += "\nDigite *0* para menu principal\n";
             response += "Digite o *número* da missa para ver detalhes (caso tenha permissão)";
             
-            if (userData && userData.idPerfil === 42) {
+            if (userData && userData.isPadre) {
                 response += "\n\n✨ *Opção de Padre*:\nDigite a letra *E* seguido do número da missa para editar o celebrante (ex: E1)";
             }
             
@@ -1007,7 +1017,8 @@ client.on('message_create', async msg => {
                     idDizimista: userData.id,
                     nomeDizimista: userData.nome,
                     apelidoDizimista: userData.apelido,
-                    idPerfil: userData.idPerfil
+                    idPerfil: userData.idPerfil,
+                    isPadre: userData.isPadre
                 };
 
                 await msg.reply(`*${saudacao}, ${primeiroNome}!* 🙏\n${mainFlow.message}`);
@@ -1025,6 +1036,7 @@ client.on('message_create', async msg => {
                     state.nomeDizimista = userData.nome;
                     state.apelidoDizimista = userData.apelido;
                     state.idPerfil = userData.idPerfil;
+                    state.isPadre = userData.isPadre;
                 }
             }
 
@@ -1064,7 +1076,7 @@ client.on('message_create', async msg => {
                 } else if (option.type === 'function') {
                     const func = internalFunctions[option.value];
                     if (func) {
-                        const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista, idPerfil: state.idPerfil });
+                        const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista, idPerfil: state.idPerfil, isPadre: state.isPadre });
                         await msg.reply(result);
                     } else {
                         console.error(`Função ${option.value} não encontrada.`);
@@ -1250,7 +1262,7 @@ client.on('message_create', async msg => {
                 const index = parseInt(text) - 1;
 
                 // --- Lógica de Edição para Padre (Comando E + número) ---
-                if (text.startsWith('e') && state.idPerfil === 42) {
+                if (text.startsWith('e') && state.isPadre) {
                     const editIndex = parseInt(text.substring(1)) - 1;
                     if (!isNaN(editIndex) && state.availableMasses && state.availableMasses[editIndex]) {
                         const selectedMass = state.availableMasses[editIndex];
@@ -1370,7 +1382,8 @@ client.on('message_create', async msg => {
                         id: state.idDizimista,
                         nome: state.nomeDizimista,
                         apelido: state.apelidoDizimista,
-                        idPerfil: state.idPerfil
+                        idPerfil: state.idPerfil,
+                        isPadre: state.isPadre
                     });
                     await msg.reply(result);
 
