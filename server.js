@@ -1376,7 +1376,7 @@ client.on('message_create', async msg => {
 
                 } catch (err) {
                     console.error('Erro ao editar celebrante:', err);
-                    await msg.reply("Houve um erro ao salvar o novo celebrante. Tente novamente.");
+                    await msg.reply(`⚠️ Houve um erro ao salvar o novo celebrante: ${err.message || 'Erro desconhecido'}`);
                 } finally {
                     if (conn) await conn.close();
                 }
