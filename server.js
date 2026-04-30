@@ -280,15 +280,17 @@ const internalFunctions = {
         try {
             conn = await getOracleConnection();
             const resDiz = await conn.execute(`
-                SELECT ID_DIZIMISTA, NOME, APELIDO FROM DIZIMISTAS 
-                WHERE REGEXP_REPLACE(TELEFONE, '[^0-9]', '') LIKE :phone
-                AND STATUS = 1
+                SELECT d.ID_DIZIMISTA, d.NOME, d.APELIDO, u.ID_PERFIL 
+                FROM DIZIMISTAS d
+                LEFT JOIN USUARIOS u ON d.ID_DIZIMISTA = u.ID_DIZIMISTA
+                WHERE REGEXP_REPLACE(d.TELEFONE, '[^0-9]', '') LIKE :phone
+                AND d.STATUS = 1
             `, { phone: '%' + cleanPhone });
 
             if (resDiz.rows.length > 0) {
                 const r = resDiz.rows[0];
-                console.log(`[ID] Dizimista localizado: ${r.NOME} (ID: ${r.ID_DIZIMISTA})`);
-                return { id: r.ID_DIZIMISTA, nome: r.NOME, apelido: r.APELIDO || r.NOME };
+                console.log(`[ID] Dizimista localizado: ${r.NOME} (ID: ${r.ID_DIZIMISTA}, Perfil: ${r.ID_PERFIL})`);
+                return { id: r.ID_DIZIMISTA, nome: r.NOME, apelido: r.APELIDO || r.NOME, idPerfil: r.ID_PERFIL };
             }
             console.log(`[ID] Nenhum dizimista encontrado para o telefone: ${cleanPhone}`);
             return null;
@@ -331,6 +333,10 @@ const internalFunctions = {
 
             response += "\nDigite *0* para menu principal\n";
             response += "Digite o *número* da missa para ver detalhes (caso tenha permissão)";
+            
+            if (userData && userData.idPerfil === 42) {
+                response += "\n\n✨ *Opção de Padre*:\nDigite a letra *E* seguido do número da missa para editar o celebrante (ex: E1)";
+            }
             
             return response;
         } catch (err) {
@@ -1000,7 +1006,8 @@ client.on('message_create', async msg => {
                     flowId: 'main_menu',
                     idDizimista: userData.id,
                     nomeDizimista: userData.nome,
-                    apelidoDizimista: userData.apelido
+                    apelidoDizimista: userData.apelido,
+                    idPerfil: userData.idPerfil
                 };
 
                 await msg.reply(`*${saudacao}, ${primeiroNome}!* 🙏\n${mainFlow.message}`);
@@ -1017,6 +1024,7 @@ client.on('message_create', async msg => {
                     state.idDizimista = userData.id;
                     state.nomeDizimista = userData.nome;
                     state.apelidoDizimista = userData.apelido;
+                    state.idPerfil = userData.idPerfil;
                 }
             }
 
@@ -1056,7 +1064,7 @@ client.on('message_create', async msg => {
                 } else if (option.type === 'function') {
                     const func = internalFunctions[option.value];
                     if (func) {
-                        const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista });
+                        const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista, idPerfil: state.idPerfil });
                         await msg.reply(result);
                     } else {
                         console.error(`Função ${option.value} não encontrada.`);
@@ -1240,6 +1248,22 @@ client.on('message_create', async msg => {
                 }
 
                 const index = parseInt(text) - 1;
+
+                // --- Lógica de Edição para Padre (Comando E + número) ---
+                if (text.startsWith('e') && state.idPerfil === 42) {
+                    const editIndex = parseInt(text.substring(1)) - 1;
+                    if (!isNaN(editIndex) && state.availableMasses && state.availableMasses[editIndex]) {
+                        const selectedMass = state.availableMasses[editIndex];
+                        userStates[phone] = {
+                            ...state,
+                            flowId: 'editar_celebrante_nome',
+                            editingMass: selectedMass
+                        };
+                        await msg.reply(`📝 Você escolheu editar o celebrante da missa de *${selectedMass.DATA} às ${selectedMass.HORA}*.\n\nPor favor, digite o *NOME* do novo celebrante:`);
+                        return;
+                    }
+                }
+
                 if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
                     const selectedMass = state.availableMasses[index];
                     let conn;
@@ -1309,6 +1333,54 @@ client.on('message_create', async msg => {
                 } else {
                     await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista.");
                 }
+            } else if (state.flowId === 'editar_celebrante_nome') {
+                console.log(`[STATE] Usuário ${phone} definindo novo celebrante: ${msg.body}`);
+                const novoCelebrante = msg.body.trim();
+                const mass = state.editingMass;
+
+                if (novoCelebrante.length < 3) {
+                    await msg.reply("Nome muito curto. Por favor, digite o nome completo do celebrante:");
+                    return;
+                }
+
+                let conn;
+                try {
+                    conn = await getOracleConnection();
+
+                    // 1. Gravar alteração na tabela MISSAS
+                    await conn.execute(`
+                        UPDATE MISSAS SET CELEBRANTE = :nome WHERE ID_MISSA = :id
+                    `, { nome: novoCelebrante, id: mass.ID_MISSA });
+
+                    // 2. Gravar Log de Auditoria
+                    await conn.execute(`
+                        INSERT INTO AUDITORIA (TABELA, ID_REGISTRO, OPERACAO, USUARIO, DATA_HORA, DADOS_ANTERIORES, DADOS_NOVOS)
+                        VALUES ('MISSAS', :id, 'UPDATE_CELEBRANTE', :user, SYSDATE, :old, :new)
+                    `, {
+                        id: mass.ID_MISSA,
+                        user: state.nomeDizimista,
+                        old: JSON.stringify({ celebrante: mass.CELEBRANTE }),
+                        new: JSON.stringify({ celebrante: novoCelebrante })
+                    });
+
+                    await msg.reply(`✅ Celebrante atualizado com sucesso para: *${novoCelebrante}*!`);
+
+                    // 3. Repete o menu de missas atualizado
+                    const result = await internalFunctions.listarMissas(msg, contact, {
+                        id: state.idDizimista,
+                        nome: state.nomeDizimista,
+                        apelido: state.apelidoDizimista,
+                        idPerfil: state.idPerfil
+                    });
+                    await msg.reply(result);
+
+                } catch (err) {
+                    console.error('Erro ao editar celebrante:', err);
+                    await msg.reply("Houve um erro ao salvar o novo celebrante. Tente novamente.");
+                } finally {
+                    if (conn) await conn.close();
+                }
+
             } else if (state.flowId === 'cancelar_selecao') {
                 console.log(`[STATE] Usuário ${phone} selecionando missa para cancelar: ${text}`);
 
