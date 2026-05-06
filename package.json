@@ -1,6 +1,6 @@
 {
   "name": "chatbot",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "description": "Este projeto é uma demonstração de como automatizar o WhatsApp Web utilizando **Python** e **Selenium**.",
   "main": "index.js",
   "scripts": {

@@ -434,7 +434,7 @@
             <div id="chat-window" class="hidden" style="height: 100%; display: flex; flex-direction: column;">
                 <div class="chat-header" style="justify-content: space-between;">
                     <h4 id="active-chat-name">Nome do Contato</h4>
-                    <span style="font-size: 0.7rem; color: var(--text-secondary); opacity: 0.5;">v1.3.0 (16/04/26)</span>
+                    <span style="font-size: 0.7rem; color: var(--text-secondary); opacity: 0.5;">v1.4.0 (05/05/26)</span>
                 </div>
                 <div class="messages" id="messages-container"></div>
                 <div class="chat-input">
@@ -698,12 +698,18 @@
             container.innerHTML = '';
             chats.forEach(chat => {
                 const displayName = getDizimistaNameByPhone(chat.name);
+                const isGroup = chat.id.includes('@g.us');
                 const item = document.createElement('div');
                 item.className = `chat-item ${activeChatId === chat.id ? 'active' : ''}`;
                 item.onclick = () => selectChat(chat.id, displayName);
                 item.innerHTML = `
                     <div class="profile-img">${displayName.charAt(0)}</div>
-                    <div class="chat-info"><h3>${displayName}</h3><p>${chat.unreadCount > 0 ? `<b>${chat.unreadCount} novas</b>` : 'Ver conversa'}</p></div>
+                    <div class="chat-info">
+                        <h3>${displayName}</h3>
+                        <p style="font-size: 0.7rem; color: var(--text-secondary); font-family: monospace; margin-top: 2px; word-break: break-all;">
+                            ${isGroup ? `<b style="color: var(--primary-accent)">ID:</b> ` : ''}${chat.id}
+                        </p>
+                    </div>
                 `;
                 container.appendChild(item);
             });

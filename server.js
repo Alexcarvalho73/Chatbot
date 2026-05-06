@@ -284,7 +284,7 @@ const internalFunctions = {
                        (SELECT 1 FROM DIZIMISTA_PASTORAL dp 
                         JOIN PASTORAIS p ON dp.ID_PASTORAL = p.ID_PASTORAL
                         WHERE dp.ID_DIZIMISTA = d.ID_DIZIMISTA 
-                        AND UPPER(p.NOME) LIKE '%PADRE%' AND ROWNUM = 1) as IS_PADRE
+                        AND p.NOME = 'Padres' AND ROWNUM = 1) as IS_PADRE
                 FROM DIZIMISTAS d
                 LEFT JOIN USUARIOS u ON d.ID_DIZIMISTA = u.ID_DIZIMISTA
                 WHERE REGEXP_REPLACE(d.TELEFONE, '[^0-9]', '') LIKE :phone
@@ -294,10 +294,10 @@ const internalFunctions = {
             if (resDiz.rows.length > 0) {
                 const r = resDiz.rows[0];
                 console.log(`[ID] Dizimista localizado: ${r.NOME} (ID: ${r.ID_DIZIMISTA}, Perfil: ${r.ID_PERFIL}, IsPadre: ${r.IS_PADRE})`);
-                return { 
-                    id: r.ID_DIZIMISTA, 
-                    nome: r.NOME, 
-                    apelido: r.APELIDO || r.NOME, 
+                return {
+                    id: r.ID_DIZIMISTA,
+                    nome: r.NOME,
+                    apelido: r.APELIDO || r.NOME,
                     idPerfil: r.ID_PERFIL,
                     isPadre: r.IS_PADRE === 1
                 };
@@ -343,11 +343,11 @@ const internalFunctions = {
 
             response += "\nDigite *0* para menu principal\n";
             response += "Digite o *número* da missa para ver detalhes (caso tenha permissão)";
-            
+
             if (userData && userData.isPadre) {
                 response += "\n\n✨ *Opção de Padre*:\nDigite a letra *E* seguido do número da missa para editar o celebrante (ex: E1)";
             }
-            
+
             return response;
         } catch (err) {
             console.error('Erro listarMissas:', err);
@@ -2020,9 +2020,9 @@ async function execMessageRoutine() {
     try {
         conn = await getOracleConnection();
 
-        // Busca mensagens pendentes
+        // Busca mensagens pendentes (incluindo o novo campo TIPO)
         const result = await conn.execute(`
-            SELECT ID_MENSAGENS, TELEFONE, TEXTO 
+            SELECT ID_MENSAGENS, TELEFONE, TEXTO, NVL(TIPO, 'T') as TIPO
             FROM MENSAGENS 
             WHERE STATUS = 0
             ORDER BY ID_MENSAGENS ASC
@@ -2046,36 +2046,53 @@ async function execMessageRoutine() {
                 let idMsg = row.ID_MENSAGENS;
                 let phone = row.TELEFONE;
                 let text = row.TEXTO;
+                let tipo = row.TIPO; // 'G' para Grupo, 'T' para Telefone
 
                 if (!phone || !text) {
-                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Telefone ou Texto vazio' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Telefone/ID ou Texto vazio' WHERE ID_MENSAGENS = :id`, { id: idMsg });
                     continue;
                 }
 
-                // Limpa e formata o telefone
-                const cleanPhone = phone.replace(/\D/g, '');
-                if (cleanPhone.length < 10) {
-                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Número curto ou inválido' WHERE ID_MENSAGENS = :id`, { id: idMsg });
-                    continue;
+                let targetId = null;
+
+                if (tipo === 'G') {
+                    // Trata como GRUPO: Usa o ID diretamente sem limpar números
+                    targetId = phone;
+                    if (!targetId.includes('@g.us')) {
+                        await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: ID de grupo inválido (deve conter @g.us)' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+                        continue;
+                    }
+                } else {
+                    // Trata como TELEFONE individual: Mantém lógica original
+                    const cleanPhone = phone.replace(/\D/g, '');
+                    if (cleanPhone.length < 10) {
+                        await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Número curto ou inválido' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+                        continue;
+                    }
+
+                    try {
+                        const numberDetails = await Promise.race([
+                            client.getNumberId(cleanPhone),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('getNumberId timeout local')), 60000))
+                        ]);
+                        if (numberDetails) {
+                            targetId = numberDetails._serialized;
+                        } else {
+                            console.log(`[ROUTINE] Número ${phone} não possui WhatsApp ativo.`);
+                            await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Número não possui WhatsApp' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+                            continue;
+                        }
+                    } catch (timeoutErr) {
+                        console.error(`[ROUTINE] Timeout em getNumberId para ID ${idMsg}:`, timeoutErr.message);
+                        await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = :ret WHERE ID_MENSAGENS = :id`, { ret: 'Falha: Timeout ao verificar número', id: idMsg });
+                        continue;
+                    }
                 }
 
-                // Obtem o ID correto no WhatsApp (com timeout de proteção)
-                let numberDetails = null;
-                try {
-                    numberDetails = await Promise.race([
-                        client.getNumberId(cleanPhone),
-                        new Promise((_, rej) => setTimeout(() => rej(new Error('getNumberId timeout local')), 60000))
-                    ]);
-                } catch (timeoutErr) {
-                    console.error(`[ROUTINE] Timeout em getNumberId para ID ${idMsg}:`, timeoutErr.message);
-                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = :ret WHERE ID_MENSAGENS = :id`, { ret: 'Falha: Timeout ao verificar número', id: idMsg });
-                    continue;
-                }
-
-                if (numberDetails) {
-                    const targetId = numberDetails._serialized;
+                // Envio comum para ambos os tipos (se tiver targetId)
+                if (targetId) {
                     await client.sendMessage(targetId, text);
-                    console.log(`[ROUTINE] Mensagem ID ${idMsg} enviada com sucesso para ${phone}.`);
+                    console.log(`[ROUTINE] Mensagem ID ${idMsg} enviada com sucesso para ${tipo === 'G' ? 'Grupo' : 'Telefone'} ${phone}.`);
 
                     // Atualiza STATUS para 1
                     await conn.execute(`
@@ -2083,9 +2100,6 @@ async function execMessageRoutine() {
                         SET STATUS = 1, RETORNO = 'Enviado com sucesso' 
                         WHERE ID_MENSAGENS = :id
                     `, { id: idMsg });
-                } else {
-                    console.log(`[ROUTINE] Número ${phone} não possui WhatsApp ativo.`);
-                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Número não possui WhatsApp' WHERE ID_MENSAGENS = :id`, { id: idMsg });
                 }
             } catch (sendErr) {
                 console.error(`[ROUTINE] Erro ao enviar mensagem ID ${row.ID_MENSAGENS}:`, sendErr);
