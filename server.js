@@ -12,6 +12,36 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 
+// Configuração de Sistemas (Mensageria e Respostas Automáticas)
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+let systemConfig = {
+    messagingEnabled: true,
+    autoReplyEnabled: true
+};
+
+function loadConfig() {
+    if (fs.existsSync(CONFIG_FILE)) {
+        try {
+            const data = fs.readFileSync(CONFIG_FILE, 'utf8');
+            systemConfig = JSON.parse(data);
+            console.log('[CONFIG] Carregada:', systemConfig);
+        } catch (err) {
+            console.error('[CONFIG] Erro ao carregar:', err);
+        }
+    }
+}
+
+function saveConfig() {
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(systemConfig, null, 4));
+        console.log('[CONFIG] Salva:', systemConfig);
+    } catch (err) {
+        console.error('[CONFIG] Erro ao salvar:', err);
+    }
+}
+
+loadConfig();
+
 const ACCESS_TOKEN = 'Alinne05@token';
 
 // Middleware de Autenticação
@@ -811,6 +841,19 @@ app.get('/api/dizimistas', async (req, res) => {
         if (conn) await conn.close();
     }
 });
+
+// --- API de Configuração Global ---
+app.get('/api/config', (req, res) => {
+    res.json(systemConfig);
+});
+
+app.post('/api/config', (req, res) => {
+    const { messagingEnabled, autoReplyEnabled } = req.body;
+    if (typeof messagingEnabled === 'boolean') systemConfig.messagingEnabled = messagingEnabled;
+    if (typeof autoReplyEnabled === 'boolean') systemConfig.autoReplyEnabled = autoReplyEnabled;
+    saveConfig();
+    res.json({ success: true, config: systemConfig });
+});
 // ------------------------------------
 
 const client = new Client({
@@ -901,6 +944,10 @@ client.on('message_create', async msg => {
 
     // Lógica de resposta automática dinâmica
     if (!msg.fromMe) {
+        if (!systemConfig.autoReplyEnabled) {
+            console.log('[MSG] Respostas automáticas desativadas globalmente.');
+            return;
+        }
         const phone = contact.number;
         const text = msg.body.trim().toLowerCase();
 
@@ -2012,6 +2059,11 @@ async function execMessageRoutine() {
     }
     if (isRoutineRunning) {
         console.log('[ROUTINE] Skipped — Rotina já em execução (evitando concorrência).');
+        return;
+    }
+
+    if (!systemConfig.messagingEnabled) {
+        console.log('[ROUTINE] Skipped — Mensageria desativada globalmente.');
         return;
     }
 
