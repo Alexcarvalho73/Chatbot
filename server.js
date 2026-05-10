@@ -947,6 +947,11 @@ client.on('message_create', async msg => {
 
     // Lógica de resposta automática dinâmica
     if (!msg.fromMe) {
+        // Ignora mensagens de grupos para o fluxo de respostas automáticas
+        if (chat.isGroup) {
+            return;
+        }
+
         if (!systemConfig.autoReplyEnabled) {
             console.log('[MSG] Respostas automáticas desativadas globalmente.');
             return;
