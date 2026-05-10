@@ -1,4 +1,4 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
 const http = require('http');
@@ -223,10 +223,13 @@ async function initOracle() {
             await conn.execute(`
                 CREATE TABLE MENSAGENS (
                     ID_MENSAGENS NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                    TELEFONE VARCHAR2(20),
+                    TELEFONE VARCHAR2(50),
                     TEXTO VARCHAR2(4000),
                     STATUS NUMBER DEFAULT 0,
-                    RETORNO VARCHAR2(1000)
+                    RETORNO VARCHAR2(1000),
+                    DATA_CADASTRO TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    TIPO VARCHAR2(1) DEFAULT 'T',
+                    IMAGEM BLOB
                 )
             `);
             console.log('Table MENSAGENS created successfully.');
@@ -2074,11 +2077,11 @@ async function execMessageRoutine() {
 
         // Busca mensagens pendentes (incluindo o novo campo TIPO)
         const result = await conn.execute(`
-            SELECT ID_MENSAGENS, TELEFONE, TEXTO, NVL(TIPO, 'T') as TIPO
+            SELECT ID_MENSAGENS, TELEFONE, TEXTO, NVL(TIPO, 'T') as TIPO, IMAGEM
             FROM MENSAGENS 
             WHERE STATUS = 0
             ORDER BY ID_MENSAGENS ASC
-        `);
+        `, [], { fetchInfo: { "IMAGEM": { type: oracledb.BUFFER } } });
 
         if (result.rows.length === 0) {
             console.log('[ROUTINE] Nenhuma mensagem pendente.');
@@ -2100,8 +2103,8 @@ async function execMessageRoutine() {
                 let text = row.TEXTO;
                 let tipo = row.TIPO; // 'G' para Grupo, 'T' para Telefone
 
-                if (!phone || !text) {
-                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Telefone/ID ou Texto vazio' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+                if (!phone || (!text && !row.IMAGEM)) {
+                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Telefone/ID ou conteúdo (texto/imagem) vazio' WHERE ID_MENSAGENS = :id`, { id: idMsg });
                     continue;
                 }
 
@@ -2143,15 +2146,35 @@ async function execMessageRoutine() {
 
                 // Envio comum para ambos os tipos (se tiver targetId)
                 if (targetId) {
-                    await client.sendMessage(targetId, text);
-                    console.log(`[ROUTINE] Mensagem ID ${idMsg} enviada com sucesso para ${tipo === 'G' ? 'Grupo' : 'Telefone'} ${phone}.`);
+                    let sentSuccess = false;
 
-                    // Atualiza STATUS para 1
-                    await conn.execute(`
-                        UPDATE MENSAGENS 
-                        SET STATUS = 1, RETORNO = 'Enviado com sucesso' 
-                        WHERE ID_MENSAGENS = :id
-                    `, { id: idMsg });
+                    // Valida se há imagem e se é JPG (Magic numbers: FF D8 FF)
+                    if (row.IMAGEM && row.IMAGEM.length > 3 && 
+                        row.IMAGEM[0] === 0xFF && row.IMAGEM[1] === 0xD8 && row.IMAGEM[2] === 0xFF) {
+                        
+                        try {
+                            const media = new MessageMedia('image/jpeg', row.IMAGEM.toString('base64'), 'imagem.jpg');
+                            await client.sendMessage(targetId, media, { caption: text });
+                            sentSuccess = true;
+                            console.log(`[ROUTINE] Mensagem com IMAGEM ID ${idMsg} enviada com sucesso para ${tipo === 'G' ? 'Grupo' : 'Telefone'} ${phone}.`);
+                        } catch (mediaErr) {
+                            console.error(`[ROUTINE] Erro ao carregar mídia para ID ${idMsg}, tentando texto puro:`, mediaErr);
+                            await client.sendMessage(targetId, text);
+                            sentSuccess = true;
+                        }
+                    } else {
+                        await client.sendMessage(targetId, text);
+                        sentSuccess = true;
+                    }
+
+                    if (sentSuccess) {
+                        // Atualiza STATUS para 1
+                        await conn.execute(`
+                            UPDATE MENSAGENS 
+                            SET STATUS = 1, RETORNO = 'Enviado com sucesso' 
+                            WHERE ID_MENSAGENS = :id
+                        `, { id: idMsg });
+                    }
                 }
             } catch (sendErr) {
                 console.error(`[ROUTINE] Erro ao enviar mensagem ID ${row.ID_MENSAGENS}:`, sendErr);
