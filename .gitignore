@@ -21,6 +21,7 @@ venv/
 # Environment & Logs
 .env
 *.log
+config.json
 
 # SSH & Cloud Configs
 SSHVM/
