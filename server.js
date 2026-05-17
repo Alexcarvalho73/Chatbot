@@ -1098,6 +1098,7 @@ client.on('message_create', async msg => {
                         if (media && (media.mimetype.startsWith('image/') || media.mimetype === 'application/pdf')) {
                             const chavePix = systemConfig.chavePixParoquia || "Paróquia";
                             const dadosRecibo = await parseReceiptWithGemini(media.data, media.mimetype, chavePix);
+                            console.log("[GEMINI EXTRACTION]:", dadosRecibo);
                             
                             if (dadosRecibo.is_receipt) {
                                 if (!dadosRecibo.payee_matches) {
@@ -1139,7 +1140,8 @@ client.on('message_create', async msg => {
                                 let resposta = `✅ *Comprovante Identificado!*\n`;
                                 resposta += `*Valor:* R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}\n`;
                                 const [a, m, d] = dadosRecibo.date.split('-');
-                                resposta += `*Data:* ${d}/${m}/${a}\n\n`;
+                                resposta += `*Data:* ${d}/${m}/${a}\n`;
+                                resposta += `*Autenticação:* ${dadosRecibo.auth_code || 'Não encontrada na imagem'}\n\n`;
                                 resposta += `📊 *Relação de Competências:*\n`;
                                 
                                 let opcoesDisponiveis = [];
