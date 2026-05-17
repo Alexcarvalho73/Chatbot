@@ -236,6 +236,18 @@ async function initOracle() {
             `);
             console.log('Table MENSAGENS created successfully.');
         }
+
+        // Verifica se a tabela RECEBIMENTOS tem a coluna COMPROVANTE
+        try {
+            await conn.execute(`SELECT COMPROVANTE FROM RECEBIMENTOS WHERE ROWNUM = 1`);
+        } catch (err) {
+            if (err.message && err.message.includes('ORA-00904')) {
+                console.log('Adicionando coluna COMPROVANTE na tabela RECEBIMENTOS...');
+                await conn.execute(`ALTER TABLE RECEBIMENTOS ADD COMPROVANTE BLOB`);
+                console.log('Coluna COMPROVANTE adicionada com sucesso.');
+            }
+        }
+
     } catch (err) {
         console.error('Error initializing Oracle:', err);
         dbStatus = false;
@@ -648,10 +660,11 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     });
 }
 
-function gerarUltimos6Meses() {
+function gerarMesesReferencia() {
     const meses = [];
     const hoje = new Date();
-    for (let i = 5; i >= 0; i--) {
+    // 6 para trás (incluindo o atual) e 3 para frente
+    for (let i = 5; i >= -3; i--) {
         const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
         const mm = String(d.getMonth() + 1).padStart(2, '0');
         const yyyy = d.getFullYear();
@@ -1079,8 +1092,8 @@ client.on('message_create', async msg => {
                                     return;
                                 }
 
-                                // Recebeu os dados, vamos listar as ultimas 6 competencias
-                                const meses_ref = gerarUltimos6Meses();
+                                // Recebeu os dados, vamos listar as ultimas 6 competencias e 3 para frente
+                                const meses_ref = gerarMesesReferencia();
                                 let conn;
                                 let pagosMap = {};
                                 try {
@@ -1088,7 +1101,7 @@ client.on('message_create', async msg => {
                                     const res = await conn.execute(`
                                         SELECT COMPETENCIA, SUM(VALOR) as TOTAL
                                         FROM RECEBIMENTOS
-                                        WHERE ID_DIZIMISTA = :id AND STATUS = 1
+                                        WHERE ID_DIZIMISTA = :id AND STATUS IN (1, 2)
                                         GROUP BY COMPETENCIA
                                     `, { id: state.idDizimista });
                                     res.rows.forEach(r => { pagosMap[r.COMPETENCIA] = r.TOTAL; });
@@ -1102,12 +1115,22 @@ client.on('message_create', async msg => {
                                 resposta += `*Valor:* R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}\n`;
                                 const [a, m, d] = dadosRecibo.date.split('-');
                                 resposta += `*Data:* ${d}/${m}/${a}\n\n`;
-                                resposta += `📊 *Últimas 6 competências do seu dízimo:*\n`;
-                                meses_ref.forEach((comp, idx) => {
+                                resposta += `📊 *Relação de Competências:*\n`;
+                                
+                                let opcoesDisponiveis = [];
+                                let countOpcoes = 1;
+                                meses_ref.forEach((comp) => {
                                     const valor = pagosMap[comp] || 0;
-                                    resposta += `*${idx + 1}* - ${comp}: R$ ${valor.toFixed(2).replace('.', ',')}\n`;
+                                    if (valor > 0) {
+                                        resposta += `✅ ${comp}: R$ ${valor.toFixed(2).replace('.', ',')} (Já lançado)\n`;
+                                    } else {
+                                        resposta += `*${countOpcoes}* - ${comp}: pendente\n`;
+                                        opcoesDisponiveis.push({ num: countOpcoes, comp: comp });
+                                        countOpcoes++;
+                                    }
                                 });
-                                resposta += `\nPara confirmar o lançamento de R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}, digite o *NÚMERO* (1 a 6) correspondente ao mês/ano de referência (competência) para este pagamento. Ou digite *CANCELAR*.`;
+                                
+                                resposta += `\nPara confirmar o lançamento de R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}, digite o *NÚMERO* correspondente ao mês listado acima (somente os pendentes). Ou digite *CANCELAR*.`;
 
                                 // Guardar no estado para o próximo passo
                                 userStates[phone] = {
@@ -1117,7 +1140,8 @@ client.on('message_create', async msg => {
                                         valor: dadosRecibo.value,
                                         dataPagamento: `${d}/${m}/${a}`,
                                         dataDB: dadosRecibo.date, // Formato YYYY-MM-DD
-                                        mesesRef: meses_ref
+                                        opcoes: opcoesDisponiveis,
+                                        base64Image: media.data
                                     }
                                 };
                                 await msg.reply(resposta);
@@ -2043,38 +2067,46 @@ client.on('message_create', async msg => {
                 const textNum = parseInt(text);
                 const recibo = state.reciboData;
                 
-                if (!isNaN(textNum) && textNum >= 1 && textNum <= 6 && recibo && recibo.mesesRef) {
-                    const competenciaEscolhida = recibo.mesesRef[textNum - 1];
-                    let conn;
-                    try {
-                        conn = await getOracleConnection();
-                        await conn.execute(`
-                            INSERT INTO RECEBIMENTOS 
-                            (ID_DIZIMISTA, DATA_RECEBIMENTO, COMPETENCIA, VALOR, ID_TIPO_PAGAMENTO, ID_USUARIO, STATUS, OBSERVACAO, ID_TIPO_LANCAMENTO)
-                            VALUES
-                            (:id, TO_DATE(:dataRec, 'YYYY-MM-DD'), :comp, :valor, 1, 1, 1, 'Lancamento com autoinformação atraves de recibo carregado na plataforma', 1)
-                        `, {
-                            id: state.idDizimista,
-                            dataRec: recibo.dataDB,
-                            comp: competenciaEscolhida,
-                            valor: recibo.valor
-                        });
-                        
-                        await msg.reply(`🎉 *Lançamento Confirmado!*\n\nO dízimo no valor de R$ ${recibo.valor.toFixed(2).replace('.',',')} referente à competência *${competenciaEscolhida}* foi registrado no sistema com sucesso. Muito obrigado, ${state.apelidoDizimista || state.nomeDizimista}! 🙏`);
-                        
-                        // Retorna ao menu
-                        const mainFlow = chatFlows['main_menu'];
-                        userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
-                        if (mainFlow) await msg.reply(mainFlow.message);
-                        
-                    } catch (dbErr) {
-                        console.error('Erro ao inserir recebimento:', dbErr);
-                        await msg.reply('⚠️ Ocorreu um erro ao salvar o lançamento no banco de dados. Contate a secretaria.');
-                    } finally {
-                        if (conn) await conn.close();
+                if (!isNaN(textNum) && recibo && recibo.opcoes) {
+                    const opcaoEscolhida = recibo.opcoes.find(o => o.num === textNum);
+                    
+                    if (opcaoEscolhida) {
+                        const competenciaEscolhida = opcaoEscolhida.comp;
+                        const comprovanteBuffer = Buffer.from(recibo.base64Image, 'base64');
+                        let conn;
+                        try {
+                            conn = await getOracleConnection();
+                            await conn.execute(`
+                                INSERT INTO RECEBIMENTOS 
+                                (ID_DIZIMISTA, DATA_RECEBIMENTO, COMPETENCIA, VALOR, ID_TIPO_PAGAMENTO, ID_USUARIO, STATUS, OBSERVACAO, ID_TIPO_LANCAMENTO, COMPROVANTE)
+                                VALUES
+                                (:id, TO_DATE(:dataRec, 'YYYY-MM-DD'), :comp, :valor, 1, 1, 2, 'Lancamento com autoinformação atraves de recibo carregado na plataforma', 1, :comprovante)
+                            `, {
+                                id: state.idDizimista,
+                                dataRec: recibo.dataDB,
+                                comp: competenciaEscolhida,
+                                valor: recibo.valor,
+                                comprovante: comprovanteBuffer
+                            });
+                            
+                            await msg.reply(`🎉 *Lançamento Pendente Confirmado!*\n\nO dízimo no valor de R$ ${recibo.valor.toFixed(2).replace('.',',')} referente à competência *${competenciaEscolhida}* foi registrado no sistema com sucesso (status pendente para validação). Muito obrigado, ${state.apelidoDizimista || state.nomeDizimista}! 🙏`);
+                            
+                            // Retorna ao menu
+                            const mainFlow = chatFlows['main_menu'];
+                            userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                            if (mainFlow) await msg.reply(mainFlow.message);
+                            
+                        } catch (dbErr) {
+                            console.error('Erro ao inserir recebimento:', dbErr);
+                            await msg.reply('⚠️ Ocorreu um erro ao salvar o lançamento no banco de dados. Contate a secretaria.');
+                        } finally {
+                            if (conn) await conn.close();
+                        }
+                    } else {
+                        await msg.reply('Opção inválida. Digite um número correspondente a um dos meses pendentes listados anteriormente, ou digite *CANCELAR*.');
                     }
                 } else {
-                    await msg.reply('Opção inválida. Digite um número de *1 a 6* correspondente ao mês listado anteriormente, ou digite *CANCELAR*.');
+                    await msg.reply('Opção inválida. Digite um número correspondente a um dos meses pendentes listados anteriormente, ou digite *CANCELAR*.');
                 }
             } else {
                 // Fallback para qualquer outra coisa: volta ao menu principal preservando ID
