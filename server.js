@@ -581,14 +581,12 @@ const internalFunctions = {
     }
 };
 
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const https = require('https');
 
 async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     if (!systemConfig.geminiApiKey) {
         throw new Error("Chave da API do Gemini não configurada no painel de configurações (config.json).");
     }
-    const genAI = new GoogleGenerativeAI(systemConfig.geminiApiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     const prompt = `Analise este comprovante de pagamento bancário ou PIX.
     Extraia as seguintes informações ESTRITAMENTE em formato JSON (sem marcadores Markdown como \`\`\`json):
@@ -600,14 +598,54 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     Exemplo de saída esperada:
     {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true}`;
 
-    const imageParts = [{ inlineData: { data: base64Data, mimeType: mimeType } }];
-    const result = await model.generateContent([prompt, ...imageParts]);
-    let responseText = result.response.text().trim();
-    
-    if (responseText.startsWith('\`\`\`json')) responseText = responseText.replace(/^\`\`\`json/, '');
-    if (responseText.endsWith('\`\`\`')) responseText = responseText.replace(/\`\`\`$/, '');
-    
-    return JSON.parse(responseText.trim());
+    const requestBody = JSON.stringify({
+        contents: [
+            {
+                parts: [
+                    { text: prompt },
+                    {
+                        inlineData: {
+                            mimeType: mimeType,
+                            data: base64Data
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    return new Promise((resolve, reject) => {
+        const req = https.request({
+            hostname: 'generativelanguage.googleapis.com',
+            path: '/v1beta/models/gemini-1.5-flash:generateContent?key=' + systemConfig.geminiApiKey,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(requestBody)
+            }
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => { data += chunk; });
+            res.on('end', () => {
+                if (res.statusCode !== 200) {
+                    return reject(new Error("Erro na API do Gemini: " + data));
+                }
+                try {
+                    const parsed = JSON.parse(data);
+                    let responseText = parsed.candidates[0].content.parts[0].text.trim();
+                    if (responseText.startsWith('\`\`\`json')) responseText = responseText.replace(/^\`\`\`json/, '');
+                    if (responseText.endsWith('\`\`\`')) responseText = responseText.replace(/\`\`\`$/, '');
+                    resolve(JSON.parse(responseText.trim()));
+                } catch (e) {
+                    reject(new Error("Falha ao parsear resposta da IA: " + e.message));
+                }
+            });
+        });
+
+        req.on('error', (e) => reject(e));
+        req.write(requestBody);
+        req.end();
+    });
 }
 
 function gerarUltimos6Meses() {
