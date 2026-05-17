@@ -617,7 +617,7 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     return new Promise((resolve, reject) => {
         const req = https.request({
             hostname: 'generativelanguage.googleapis.com',
-            path: '/v1beta/models/gemini-1.5-flash-latest:generateContent?key=' + systemConfig.geminiApiKey.trim(),
+            path: '/v1beta/models/gemini-flash-latest:generateContent?key=' + systemConfig.geminiApiKey.trim(),
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
