@@ -248,6 +248,18 @@ async function initOracle() {
             }
         }
 
+        // Verifica se a tabela RECEBIMENTOS tem a coluna AUTENTICACAO
+        try {
+            await conn.execute(`SELECT AUTENTICACAO FROM RECEBIMENTOS WHERE ROWNUM = 1`);
+        } catch (err) {
+            if (err.message && err.message.includes('ORA-00904')) {
+                console.log('Adicionando coluna AUTENTICACAO na tabela RECEBIMENTOS...');
+                await conn.execute(`ALTER TABLE RECEBIMENTOS ADD AUTENTICACAO VARCHAR2(255)`);
+                await conn.execute(`CREATE INDEX IDX_RECEB_AUTH ON RECEBIMENTOS(AUTENTICACAO)`);
+                console.log('Coluna AUTENTICACAO adicionada com sucesso.');
+            }
+        }
+
     } catch (err) {
         console.error('Error initializing Oracle:', err);
         dbStatus = false;
@@ -606,9 +618,10 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     2. value: numérico (o valor exato pago, ex: 50.00).
     3. date: string (a data do pagamento no formato YYYY-MM-DD).
     4. payee_matches: booleano (true se o recebedor for a chave "${chavePix}" ou parecer ser a Paróquia, false caso contrário).
+    5. auth_code: string (o código de autenticação, ID da transação PIX, código de controle ou identificador único do recibo. Se não houver, envie uma string vazia).
     
     Exemplo de saída esperada:
-    {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true}`;
+    {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true, "auth_code": "E00360305202401011234a56b78c90d"}`;
 
     const requestBody = JSON.stringify({
         contents: [
@@ -1098,6 +1111,18 @@ client.on('message_create', async msg => {
                                 let pagosMap = {};
                                 try {
                                     conn = await getOracleConnection();
+                                    
+                                    // Validação de Duplicidade de Autenticação
+                                    if (dadosRecibo.auth_code && dadosRecibo.auth_code.trim() !== '') {
+                                        const resAuth = await conn.execute(`
+                                            SELECT COUNT(*) as QTD FROM RECEBIMENTOS WHERE AUTENTICACAO = :auth
+                                        `, { auth: dadosRecibo.auth_code.trim() });
+                                        if (resAuth.rows[0].QTD > 0) {
+                                            await msg.reply('⚠️ *Atenção:* Identifiquei que este comprovante já foi enviado e registrado no sistema anteriormente (Código de Autenticação duplicado). Não é possível enviar o mesmo recibo mais de uma vez.');
+                                            return;
+                                        }
+                                    }
+
                                     const res = await conn.execute(`
                                         SELECT COMPETENCIA, SUM(VALOR) as TOTAL
                                         FROM RECEBIMENTOS
@@ -1140,6 +1165,7 @@ client.on('message_create', async msg => {
                                         valor: dadosRecibo.value,
                                         dataPagamento: `${d}/${m}/${a}`,
                                         dataDB: dadosRecibo.date, // Formato YYYY-MM-DD
+                                        authCode: dadosRecibo.auth_code || null,
                                         opcoes: opcoesDisponiveis,
                                         base64Image: media.data
                                     }
@@ -2078,15 +2104,16 @@ client.on('message_create', async msg => {
                             conn = await getOracleConnection();
                             await conn.execute(`
                                 INSERT INTO RECEBIMENTOS 
-                                (ID_DIZIMISTA, DATA_RECEBIMENTO, COMPETENCIA, VALOR, ID_TIPO_PAGAMENTO, ID_USUARIO, STATUS, OBSERVACAO, ID_TIPO_LANCAMENTO, COMPROVANTE)
+                                (ID_DIZIMISTA, DATA_RECEBIMENTO, COMPETENCIA, VALOR, ID_TIPO_PAGAMENTO, ID_USUARIO, STATUS, OBSERVACAO, ID_TIPO_LANCAMENTO, COMPROVANTE, AUTENTICACAO)
                                 VALUES
-                                (:id, TO_DATE(:dataRec, 'YYYY-MM-DD'), :comp, :valor, 1, 1, 2, 'Lancamento com autoinformação atraves de recibo carregado na plataforma', 1, :comprovante)
+                                (:id, TO_DATE(:dataRec, 'YYYY-MM-DD'), :comp, :valor, 1, 1, 2, 'Lancamento com autoinformação atraves de recibo carregado na plataforma', 1, :comprovante, :authcode)
                             `, {
                                 id: state.idDizimista,
                                 dataRec: recibo.dataDB,
                                 comp: competenciaEscolhida,
                                 valor: recibo.valor,
-                                comprovante: comprovanteBuffer
+                                comprovante: comprovanteBuffer,
+                                authcode: recibo.authCode || null
                             });
                             
                             await msg.reply(`🎉 *Lançamento Pendente Confirmado!*\n\nO dízimo no valor de R$ ${recibo.valor.toFixed(2).replace('.',',')} referente à competência *${competenciaEscolhida}* foi registrado no sistema com sucesso (status pendente para validação). Muito obrigado, ${state.apelidoDizimista || state.nomeDizimista}! 🙏`);
