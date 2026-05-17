@@ -16,7 +16,9 @@ app.use(cookieParser());
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 let systemConfig = {
     messagingEnabled: true,
-    autoReplyEnabled: true
+    autoReplyEnabled: true,
+    geminiApiKey: "",
+    chavePixParoquia: ""
 };
 
 function loadConfig() {
@@ -579,6 +581,47 @@ const internalFunctions = {
     }
 };
 
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
+    if (!systemConfig.geminiApiKey) {
+        throw new Error("Chave da API do Gemini não configurada no painel de configurações (config.json).");
+    }
+    const genAI = new GoogleGenerativeAI(systemConfig.geminiApiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    const prompt = `Analise este comprovante de pagamento bancário ou PIX.
+    Extraia as seguintes informações ESTRITAMENTE em formato JSON (sem marcadores Markdown como \`\`\`json):
+    1. is_receipt: booleano (true se for um comprovante de pagamento válido, false caso contrário).
+    2. value: numérico (o valor exato pago, ex: 50.00).
+    3. date: string (a data do pagamento no formato YYYY-MM-DD).
+    4. payee_matches: booleano (true se o recebedor for a chave "${chavePix}" ou parecer ser a Paróquia, false caso contrário).
+    
+    Exemplo de saída esperada:
+    {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true}`;
+
+    const imageParts = [{ inlineData: { data: base64Data, mimeType: mimeType } }];
+    const result = await model.generateContent([prompt, ...imageParts]);
+    let responseText = result.response.text().trim();
+    
+    if (responseText.startsWith('\`\`\`json')) responseText = responseText.replace(/^\`\`\`json/, '');
+    if (responseText.endsWith('\`\`\`')) responseText = responseText.replace(/\`\`\`$/, '');
+    
+    return JSON.parse(responseText.trim());
+}
+
+function gerarUltimos6Meses() {
+    const meses = [];
+    const hoje = new Date();
+    for (let i = 5; i >= 0; i--) {
+        const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        meses.push(`${mm}/${yyyy}`);
+    }
+    return meses;
+}
+
 // ============================================================
 // UTILITÁRIOS DE CADASTRO
 // ============================================================
@@ -851,9 +894,11 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-    const { messagingEnabled, autoReplyEnabled } = req.body;
+    const { messagingEnabled, autoReplyEnabled, geminiApiKey, chavePixParoquia } = req.body;
     if (typeof messagingEnabled === 'boolean') systemConfig.messagingEnabled = messagingEnabled;
     if (typeof autoReplyEnabled === 'boolean') systemConfig.autoReplyEnabled = autoReplyEnabled;
+    if (typeof geminiApiKey === 'string') systemConfig.geminiApiKey = geminiApiKey;
+    if (typeof chavePixParoquia === 'string') systemConfig.chavePixParoquia = chavePixParoquia;
     saveConfig();
     res.json({ success: true, config: systemConfig });
 });
@@ -967,6 +1012,91 @@ client.on('message_create', async msg => {
         processingPhones.add(phone);
 
         try {
+            // --- DETECÇÃO DE RECIBO DE PAGAMENTO (MÍDIA) ---
+            if (msg.hasMedia) {
+                // Verificar se o usuário já é identificado (ou identificá-lo)
+                let state = userStates[phone];
+                if (!state || (!state.idDizimista)) {
+                    const userData = await internalFunctions.buscarDizimistaPorTelefone(phone);
+                    if (userData) {
+                        if (!state) state = {};
+                        state.idDizimista = userData.id;
+                        state.nomeDizimista = userData.nome;
+                        state.apelidoDizimista = userData.apelido;
+                        userStates[phone] = state;
+                    }
+                }
+
+                if (state && state.idDizimista) {
+                    await msg.reply('⏳ Estou analisando a imagem enviada. Um momento...');
+                    try {
+                        const media = await msg.downloadMedia();
+                        if (media && (media.mimetype.startsWith('image/') || media.mimetype === 'application/pdf')) {
+                            const chavePix = systemConfig.chavePixParoquia || "Paróquia";
+                            const dadosRecibo = await parseReceiptWithGemini(media.data, media.mimetype, chavePix);
+                            
+                            if (dadosRecibo.is_receipt) {
+                                if (!dadosRecibo.payee_matches) {
+                                    await msg.reply('⚠️ Este comprovante não parece ter sido pago para a chave PIX da nossa Paróquia. Se isso for um erro, contate a secretaria.');
+                                    return;
+                                }
+
+                                // Recebeu os dados, vamos listar as ultimas 6 competencias
+                                const meses_ref = gerarUltimos6Meses();
+                                let conn;
+                                let pagosMap = {};
+                                try {
+                                    conn = await getOracleConnection();
+                                    const res = await conn.execute(`
+                                        SELECT COMPETENCIA, SUM(VALOR) as TOTAL
+                                        FROM RECEBIMENTOS
+                                        WHERE ID_DIZIMISTA = :id AND STATUS = 1
+                                        GROUP BY COMPETENCIA
+                                    `, { id: state.idDizimista });
+                                    res.rows.forEach(r => { pagosMap[r.COMPETENCIA] = r.TOTAL; });
+                                } catch(dbErr) {
+                                    console.error('Erro ao buscar historico:', dbErr);
+                                } finally {
+                                    if (conn) await conn.close();
+                                }
+
+                                let resposta = `✅ *Comprovante Identificado!*\n`;
+                                resposta += `*Valor:* R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}\n`;
+                                const [a, m, d] = dadosRecibo.date.split('-');
+                                resposta += `*Data:* ${d}/${m}/${a}\n\n`;
+                                resposta += `📊 *Últimas 6 competências do seu dízimo:*\n`;
+                                meses_ref.forEach((comp, idx) => {
+                                    const valor = pagosMap[comp] || 0;
+                                    resposta += `*${idx + 1}* - ${comp}: R$ ${valor.toFixed(2).replace('.', ',')}\n`;
+                                });
+                                resposta += `\nPara confirmar o lançamento de R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}, digite o *NÚMERO* (1 a 6) correspondente ao mês/ano de referência (competência) para este pagamento. Ou digite *CANCELAR*.`;
+
+                                // Guardar no estado para o próximo passo
+                                userStates[phone] = {
+                                    ...state,
+                                    flowId: 'processar_competencia_recibo',
+                                    reciboData: {
+                                        valor: dadosRecibo.value,
+                                        dataPagamento: `${d}/${m}/${a}`,
+                                        dataDB: dadosRecibo.date, // Formato YYYY-MM-DD
+                                        mesesRef: meses_ref
+                                    }
+                                };
+                                await msg.reply(resposta);
+                                return; // Fim do processamento da imagem
+                            } else {
+                                await msg.reply('⚠️ A imagem enviada não parece ser um comprovante de pagamento válido.');
+                                return;
+                            }
+                        }
+                    } catch (mediaErr) {
+                        console.error('Erro ao processar mídia com Gemini:', mediaErr);
+                        await msg.reply(`⚠️ Houve um erro ao tentar ler o recibo: ${mediaErr.message}`);
+                        return;
+                    }
+                }
+            }
+
             // --- 0. COMANDOS GLOBAIS DE NAVEGAÇÃO E RESET ---
             // Palavras-chave que reiniciam tudo (case-insensitive, sem acentos)
             const textNorm = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -1871,6 +2001,43 @@ client.on('message_create', async msg => {
                     if (conn) await conn.close();
                 }
 
+            } else if (state.flowId === 'processar_competencia_recibo') {
+                const textNum = parseInt(text);
+                const recibo = state.reciboData;
+                
+                if (!isNaN(textNum) && textNum >= 1 && textNum <= 6 && recibo && recibo.mesesRef) {
+                    const competenciaEscolhida = recibo.mesesRef[textNum - 1];
+                    let conn;
+                    try {
+                        conn = await getOracleConnection();
+                        await conn.execute(`
+                            INSERT INTO RECEBIMENTOS 
+                            (ID_DIZIMISTA, DATA_RECEBIMENTO, COMPETENCIA, VALOR, ID_TIPO_PAGAMENTO, ID_USUARIO, STATUS, OBSERVACAO, ID_TIPO_LANCAMENTO)
+                            VALUES
+                            (:id, TO_DATE(:dataRec, 'YYYY-MM-DD'), :comp, :valor, 1, 1, 1, 'Lancamento com autoinformação atraves de recibo carregado na plataforma', 1)
+                        `, {
+                            id: state.idDizimista,
+                            dataRec: recibo.dataDB,
+                            comp: competenciaEscolhida,
+                            valor: recibo.valor
+                        });
+                        
+                        await msg.reply(`🎉 *Lançamento Confirmado!*\n\nO dízimo no valor de R$ ${recibo.valor.toFixed(2).replace('.',',')} referente à competência *${competenciaEscolhida}* foi registrado no sistema com sucesso. Muito obrigado, ${state.apelidoDizimista || state.nomeDizimista}! 🙏`);
+                        
+                        // Retorna ao menu
+                        const mainFlow = chatFlows['main_menu'];
+                        userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+                        if (mainFlow) await msg.reply(mainFlow.message);
+                        
+                    } catch (dbErr) {
+                        console.error('Erro ao inserir recebimento:', dbErr);
+                        await msg.reply('⚠️ Ocorreu um erro ao salvar o lançamento no banco de dados. Contate a secretaria.');
+                    } finally {
+                        if (conn) await conn.close();
+                    }
+                } else {
+                    await msg.reply('Opção inválida. Digite um número de *1 a 6* correspondente ao mês listado anteriormente, ou digite *CANCELAR*.');
+                }
             } else {
                 // Fallback para qualquer outra coisa: volta ao menu principal preservando ID
                 const mainFlow = chatFlows['main_menu'];
