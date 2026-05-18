@@ -619,9 +619,10 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     3. date: string (a data do pagamento no formato YYYY-MM-DD).
     4. payee_matches: booleano (true se o recebedor for a chave "${chavePix}" ou parecer ser a Paróquia, false caso contrário).
     5. auth_code: string (O código alfanumérico longo que fica LOGO ABAIXO da palavra "Autenticação" ou "Autenticacao". Se não existir essa palavra exata, procure então pelo "ID da transação". É crucial dar prioridade absoluta para pegar a Autenticação se ela estiver na imagem. Se não houver nenhum dos dois, envie uma string vazia).
+    6. raw_data: string (Transcreva todos os dados relevantes legíveis no recibo. Nomes, instituições, CPFs, descrições, histórico, banco, dados de quem pagou e quem recebeu. Coloque tudo formatado em linhas separadas por \\n).
     
     Exemplo de saída esperada:
-    {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true, "auth_code": "E00360305202401011234a56b78c90d"}`;
+    {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true, "auth_code": "E00360305202401011234a56b78c90d", "raw_data": "Pagador: João\\nRecebedor: Paróquia\\nInstituição: Banco do Brasil"}`;
 
     const requestBody = JSON.stringify({
         contents: [
@@ -1141,7 +1142,12 @@ client.on('message_create', async msg => {
                                 resposta += `*Valor:* R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}\n`;
                                 const [a, m, d] = dadosRecibo.date.split('-');
                                 resposta += `*Data:* ${d}/${m}/${a}\n`;
-                                resposta += `*Autenticação:* ${dadosRecibo.auth_code || 'Não encontrada na imagem'}\n\n`;
+                                resposta += `*Autenticação:* ${dadosRecibo.auth_code || 'Não encontrada na imagem'}\n`;
+                                if (dadosRecibo.raw_data) {
+                                    resposta += `\n📄 *Dados Extraídos do Recibo:*\n_${dadosRecibo.raw_data.trim()}_\n\n`;
+                                } else {
+                                    resposta += `\n`;
+                                }
                                 resposta += `📊 *Relação de Competências:*\n`;
                                 
                                 let opcoesDisponiveis = [];
@@ -1168,6 +1174,7 @@ client.on('message_create', async msg => {
                                         dataPagamento: `${d}/${m}/${a}`,
                                         dataDB: dadosRecibo.date, // Formato YYYY-MM-DD
                                         authCode: dadosRecibo.auth_code || null,
+                                        rawData: dadosRecibo.raw_data || '',
                                         opcoes: opcoesDisponiveis,
                                         base64Image: media.data
                                     }
@@ -2104,16 +2111,22 @@ client.on('message_create', async msg => {
                         let conn;
                         try {
                             conn = await getOracleConnection();
+                            
+                            const obsBase = 'Lancamento com autoinformação atraves de recibo carregado na plataforma.\n\n';
+                            const obsExtra = recibo.rawData ? `[DADOS EXTRAIDOS PELA IA]\n${recibo.rawData}` : '';
+                            const observacaoFinal = (obsBase + obsExtra).substring(0, 1000); // Limite de caracteres para garantir que não estoura o banco
+                            
                             await conn.execute(`
                                 INSERT INTO RECEBIMENTOS 
                                 (ID_DIZIMISTA, DATA_RECEBIMENTO, COMPETENCIA, VALOR, ID_TIPO_PAGAMENTO, ID_USUARIO, STATUS, OBSERVACAO, ID_TIPO_LANCAMENTO, COMPROVANTE, AUTENTICACAO)
                                 VALUES
-                                (:id, TO_DATE(:dataRec, 'YYYY-MM-DD'), :comp, :valor, 1, 1, 2, 'Lancamento com autoinformação atraves de recibo carregado na plataforma', 1, :comprovante, :authcode)
+                                (:id, TO_DATE(:dataRec, 'YYYY-MM-DD'), :comp, :valor, 1, 1, 2, :obs, 1, :comprovante, :authcode)
                             `, {
                                 id: state.idDizimista,
                                 dataRec: recibo.dataDB,
                                 comp: competenciaEscolhida,
                                 valor: recibo.valor,
+                                obs: observacaoFinal,
                                 comprovante: comprovanteBuffer,
                                 authcode: recibo.authCode || null
                             });
