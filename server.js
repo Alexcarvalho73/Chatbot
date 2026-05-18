@@ -618,7 +618,7 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     2. value: numérico (o valor exato pago, ex: 50.00).
     3. date: string (a data do pagamento no formato YYYY-MM-DD).
     4. payee_matches: booleano (true se o recebedor for a chave "${chavePix}" ou parecer ser a Paróquia, false caso contrário).
-    5. auth_code: string (o código de autenticação, ID da transação PIX, código de controle ou identificador único do recibo. Se não houver, envie uma string vazia).
+    5. auth_code: string (O código alfanumérico longo que fica LOGO ABAIXO da palavra "Autenticação" ou "Autenticacao". Se não existir essa palavra exata, procure então pelo "ID da transação". É crucial dar prioridade absoluta para pegar a Autenticação se ela estiver na imagem. Se não houver nenhum dos dois, envie uma string vazia).
     
     Exemplo de saída esperada:
     {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true, "auth_code": "E00360305202401011234a56b78c90d"}`;
