@@ -24,14 +24,14 @@ async function check() {
         cols.rows.forEach(r => console.log(` - ${r.COLUMN_NAME} (${r.DATA_TYPE})`));
 
         // 2. Registros com STATUS = 0
-        const pend = await conn.execute(`SELECT * FROM MENSAGENS WHERE STATUS = 0`);
+        const pend = await conn.execute(`SELECT ID_MENSAGENS, TELEFONE, TEXTO, STATUS, RETORNO, DATAHORA, TIPO FROM MENSAGENS WHERE STATUS = 0`);
         console.log(`\n=== REGISTROS PENDENTES (STATUS=0): ${pend.rows.length} ===`);
-        pend.rows.forEach(r => console.log(JSON.stringify(r)));
+        pend.rows.forEach(r => console.log(`ID: ${r.ID_MENSAGENS} | TEL: ${r.TELEFONE} | TXT: ${r.TEXTO} | STATUS: ${r.STATUS} | TIPO: ${r.TIPO}`));
 
         // 3. Todos os registros (ultimos 10)
-        const all = await conn.execute(`SELECT * FROM MENSAGENS ORDER BY ID_MENSAGENS DESC FETCH FIRST 10 ROWS ONLY`);
+        const all = await conn.execute(`SELECT ID_MENSAGENS, TELEFONE, TEXTO, STATUS, RETORNO, DATAHORA, TIPO FROM MENSAGENS ORDER BY ID_MENSAGENS DESC FETCH FIRST 10 ROWS ONLY`);
         console.log(`\n=== ULTIMOS 10 REGISTROS ===`);
-        all.rows.forEach(r => console.log(JSON.stringify(r)));
+        all.rows.forEach(r => console.log(`ID: ${r.ID_MENSAGENS} | TEL: ${r.TELEFONE} | TXT: ${r.TEXTO} | STATUS: ${r.STATUS} | TIPO: ${r.TIPO} | RET: ${r.RETORNO}`));
 
     } catch (err) {
         console.error('ERRO:', err.message);
