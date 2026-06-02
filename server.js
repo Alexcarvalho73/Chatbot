@@ -85,8 +85,57 @@ const authMiddleware = (req, res, next) => {
     `);
 };
 
+// ── Endpoint MFA interno (sem authMiddleware) ────────────────────────────────
+// Chamado pelo Flask/Dizimo para enviar código de verificação pelo WhatsApp.
+// Protegido por secret key próprio (não usa o token de sessão do chatbot).
+const MFA_INTERNAL_SECRET = process.env.MFA_INTERNAL_SECRET || 'mfa_escala_secret_2026';
+
+app.post('/api/interno/enviar-mfa', async (req, res) => {
+    const { telefone, codigo, secret } = req.body || {};
+
+    if (secret !== MFA_INTERNAL_SECRET) {
+        console.warn('[MFA] Tentativa com secret inválido');
+        return res.status(403).json({ ok: false, error: 'Secret inválido' });
+    }
+
+    if (!isReady) {
+        return res.status(503).json({ ok: false, error: 'WhatsApp não está conectado no momento' });
+    }
+
+    if (!telefone || !codigo) {
+        return res.status(400).json({ ok: false, error: 'telefone e codigo são obrigatórios' });
+    }
+
+    try {
+        const cleanPhone = telefone.replace(/\D/g, '');
+        const phoneWithCountry = cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone;
+
+        const numberDetails = await client.getNumberId(phoneWithCountry);
+        if (!numberDetails) {
+            console.warn(`[MFA] Número ${cleanPhone} não possui WhatsApp ativo`);
+            return res.status(404).json({ ok: false, error: 'Número não possui WhatsApp ativo' });
+        }
+
+        const mensagem =
+            `✝️ *Escala de Servos*\n` +
+            `_Paróquia Imaculado Coração de Maria_\n\n` +
+            `Seu código de acesso é:\n\n` +
+            `*${codigo}*\n\n` +
+            `_Válido por 10 minutos. Não compartilhe este código._`;
+
+        await client.sendMessage(numberDetails._serialized, mensagem);
+        console.log(`[MFA] Código ${codigo} enviado para ${cleanPhone}`);
+        res.json({ ok: true });
+
+    } catch (err) {
+        console.error('[MFA] Erro ao enviar código:', err);
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 // Aplica o middleware em todas as rotas (exceto se você quiser abrir algo público)
 app.use(authMiddleware);
+
 
 const server = http.createServer(app);
 const io = socketIo(server);
