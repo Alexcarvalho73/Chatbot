@@ -1094,11 +1094,20 @@ client.on('message_create', async msg => {
         if (messageCache[chatId].length > 50) messageCache[chatId].shift(); // Mantém as ultimas 50
     } catch (e) { }
 
+    // Extração robusta do número real (ignorando LIDs se possível)
+    let realPhone = contact.number;
+    if (msg.from && msg.from.includes('@c.us')) {
+        realPhone = msg.from.split('@')[0];
+    } else if (msg.author && msg.author.includes('@c.us')) {
+        realPhone = msg.author.split('@')[0].split(':')[0];
+    }
+    if (realPhone && realPhone.includes(':')) realPhone = realPhone.split(':')[0];
+
     // Envia a mensagem (recebida ou enviada) para o Dashboard com contexto do chat
     io.emit('new-message', {
         chatId: chat.id._serialized,
-        from: contact.number,
-        name: contact.pushname || contact.name || contact.number,
+        from: realPhone,
+        name: contact.pushname || contact.name || realPhone,
         body: msg.body,
         timestamp: new Date(msg.timestamp * 1000).toLocaleTimeString(),
         fromMe: msg.fromMe
@@ -1115,7 +1124,8 @@ client.on('message_create', async msg => {
             console.log('[MSG] Respostas automáticas desativadas globalmente.');
             return;
         }
-        const phone = contact.number;
+        // Usa o número real extraído acima em vez de contact.number que pode ser um LID
+        const phone = realPhone;
         const text = msg.body.trim().toLowerCase();
 
         // Guard: ignora mensagem se este telefone já está sendo processado (evita duplicidade)
@@ -1858,6 +1868,14 @@ client.on('message_create', async msg => {
                     try {
                         conn = await getOracleConnection();
                         const telNacional = phone.replace(/^55/, '');
+                        
+                        // Proteção: não atualiza se o telefone for um LID (mais de 13 dígitos para Brasil, mas vamos limitar a 14 pra evitar erros e rejeitar 15+)
+                        if (telNacional.length > 14) {
+                            await msg.reply('⚠️ Identificamos que a sua conexão atual está mascarando seu número real (usando um ID de Dispositivo). Por segurança, não atualizaremos o telefone automaticamente.\n\nPor favor, peça à secretaria para atualizar seu cadastro.');
+                            delete userStates[phone];
+                            return;
+                        }
+
                         await conn.execute(
                             `UPDATE DIZIMISTAS SET TELEFONE = :tel WHERE ID_DIZIMISTA = :id`,
                             { tel: telNacional, id: state.idDizimista }
