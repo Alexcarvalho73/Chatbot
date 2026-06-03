@@ -309,6 +309,18 @@ async function initOracle() {
             }
         }
 
+        // Verifica se a tabela DIZIMISTAS tem a coluna WHATSAPP_ID (para LIDs)
+        try {
+            await conn.execute(`SELECT WHATSAPP_ID FROM DIZIMISTAS WHERE ROWNUM = 1`);
+        } catch (err) {
+            if (err.message && err.message.includes('ORA-00904')) {
+                console.log('Adicionando coluna WHATSAPP_ID na tabela DIZIMISTAS...');
+                await conn.execute(`ALTER TABLE DIZIMISTAS ADD WHATSAPP_ID VARCHAR2(50)`);
+                await conn.execute(`CREATE INDEX IDX_DIZ_WHATSAPP_ID ON DIZIMISTAS(WHATSAPP_ID)`);
+                console.log('Coluna WHATSAPP_ID adicionada com sucesso.');
+            }
+        }
+
     } catch (err) {
         console.error('Error initializing Oracle:', err);
         dbStatus = false;
@@ -377,17 +389,25 @@ const internalFunctions = {
     },
     buscarDizimistaPorTelefone: async (phone) => {
         let cleanPhone = phone.replace(/^(\+?55|55)/, '').replace(/\D/g, ''); // Remove prefixos de país e não-dígitos
+        let isLid = false;
+        const originalDigits = phone.replace(/\D/g, '');
 
-        // Lógica para acrescentar o 9º dígito (Brasil) caso o WhatsApp envie apenas 8 dígitos
-        if (cleanPhone.length === 10) { // Formato: DD + 8 dígitos
-            cleanPhone = cleanPhone.slice(0, 2) + '9' + cleanPhone.slice(2);
-        } else if (cleanPhone.length === 11 && cleanPhone.startsWith('0')) { // Formato: 0DD + 8 dígitos
-            cleanPhone = cleanPhone.slice(0, 3) + '9' + cleanPhone.slice(3);
+        if (originalDigits.length > 14) {
+            isLid = true;
+            cleanPhone = originalDigits; // Usa o numero completo sem limpar prefixos para LIDs
+        } else {
+            // Lógica para acrescentar o 9º dígito (Brasil) caso o WhatsApp envie apenas 8 dígitos
+            if (cleanPhone.length === 10) { // Formato: DD + 8 dígitos
+                cleanPhone = cleanPhone.slice(0, 2) + '9' + cleanPhone.slice(2);
+            } else if (cleanPhone.length === 11 && cleanPhone.startsWith('0')) { // Formato: 0DD + 8 dígitos
+                cleanPhone = cleanPhone.slice(0, 3) + '9' + cleanPhone.slice(3);
+            }
         }
+
         let conn;
         try {
             conn = await getOracleConnection();
-            const resDiz = await conn.execute(`
+            const query = `
                 SELECT d.ID_DIZIMISTA, d.NOME, d.APELIDO, u.ID_PERFIL,
                        (SELECT 1 FROM DIZIMISTA_PASTORAL dp 
                         JOIN PASTORAIS p ON dp.ID_PASTORAL = p.ID_PASTORAL
@@ -395,9 +415,15 @@ const internalFunctions = {
                         AND p.NOME = 'Padres' AND ROWNUM = 1) as IS_PADRE
                 FROM DIZIMISTAS d
                 LEFT JOIN USUARIOS u ON d.ID_DIZIMISTA = u.ID_DIZIMISTA
-                WHERE REGEXP_REPLACE(d.TELEFONE, '[^0-9]', '') LIKE :phone
+                WHERE (REGEXP_REPLACE(d.TELEFONE, '[^0-9]', '') LIKE :phone OR d.WHATSAPP_ID = :lid)
                 AND d.STATUS = 1
-            `, { phone: '%' + cleanPhone });
+            `;
+            const params = { 
+                phone: isLid ? 'THIS_WILL_NEVER_MATCH' : '%' + cleanPhone, 
+                lid: isLid ? cleanPhone : 'NONE'
+            };
+
+            const resDiz = await conn.execute(query, params);
 
             if (resDiz.rows.length > 0) {
                 const r = resDiz.rows[0];
@@ -1822,18 +1848,30 @@ client.on('message_create', async msg => {
                     if (resCPF.rows.length > 0) {
                         const diz = resCPF.rows[0];
                         const telAtual = diz.TELEFONE ? diz.TELEFONE.replace(/\D/g, '') : '';
+                        const isLid = phone.replace(/\D/g, '').length > 14;
                         userStates[phone] = {
                             flowId: 'cadastro_confirmar_telefone',
                             idDizimista: diz.ID_DIZIMISTA,
-                            nomeDizimista: diz.NOME
+                            nomeDizimista: diz.NOME,
+                            isLid: isLid
                         };
-                        await msg.reply(
-                            `✅ Encontramos um cadastro para o CPF informado!\n\n` +
-                            `*Nome:* ${diz.NOME}\n` +
-                            `*Telefone cadastrado:* ${telAtual || 'não informado'}\n\n` +
-                            `Deseja atualizar o telefone cadastrado para o número atual que está sendo usado?\n\n` +
-                            `Digite *S* para confirmar ou *N* para cancelar.`
-                        );
+                        if (isLid) {
+                            await msg.reply(
+                                `✅ Encontramos um cadastro para o CPF informado!\n\n` +
+                                `*Nome:* ${diz.NOME}\n\n` +
+                                `O número de onde você está falando aparece oculto por políticas de privacidade do WhatsApp (como um ID de dispositivo interno).\n\n` +
+                                `Deseja *vincular este dispositivo* ao seu cadastro para não precisar digitar o CPF nas próximas vezes?\n\n` +
+                                `Digite *S* para confirmar ou *N* para cancelar.`
+                            );
+                        } else {
+                            await msg.reply(
+                                `✅ Encontramos um cadastro para o CPF informado!\n\n` +
+                                `*Nome:* ${diz.NOME}\n` +
+                                `*Telefone cadastrado:* ${telAtual || 'não informado'}\n\n` +
+                                `Deseja atualizar o telefone cadastrado para o número atual que está sendo usado?\n\n` +
+                                `Digite *S* para confirmar ou *N* para cancelar.`
+                            );
+                        }
                     } else {
                         // CPF não encontrado → valida dígitos antes de abrir cadastro
                         if (!validarCPF(cpfDigitado)) {
@@ -1867,33 +1905,43 @@ client.on('message_create', async msg => {
                     let conn;
                     try {
                         conn = await getOracleConnection();
-                        const telNacional = phone.replace(/^55/, '');
-                        
-                        // Proteção: não atualiza se o telefone for um LID (mais de 13 dígitos para Brasil, mas vamos limitar a 14 pra evitar erros e rejeitar 15+)
-                        if (telNacional.length > 14) {
-                            await msg.reply('⚠️ Identificamos que a sua conexão atual está mascarando seu número real (usando um ID de Dispositivo). Por segurança, não atualizaremos o telefone automaticamente.\n\nPor favor, peça à secretaria para atualizar seu cadastro.');
-                            delete userStates[phone];
-                            return;
-                        }
-
-                        await conn.execute(
-                            `UPDATE DIZIMISTAS SET TELEFONE = :tel WHERE ID_DIZIMISTA = :id`,
-                            { tel: telNacional, id: state.idDizimista }
-                        );
-                        console.log(`[CADASTRO] Telefone atualizado para o dizimista ID ${state.idDizimista}`);
-                        // Invalida cache de contatos
-                        dizimistasContactCache = null;
-
+                        const rawPhoneStr = phone.replace(/\D/g, '');
+                        const isLidCheck = state.isLid || rawPhoneStr.length > 14;
                         const mainFlow = chatFlows['main_menu'];
                         const hour = new Date().getHours();
                         let saudacao = 'Boa noite';
                         if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
                         else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+                        
+                        if (isLidCheck) {
+                            // Vincula LID no banco usando os dígitos originais
+                            await conn.execute(
+                                `UPDATE DIZIMISTAS SET WHATSAPP_ID = :lid WHERE ID_DIZIMISTA = :id`,
+                                { lid: rawPhoneStr, id: state.idDizimista }
+                            );
+                            console.log(`[CADASTRO] WHATSAPP_ID vinculado para o dizimista ID ${state.idDizimista}`);
+                            dizimistasContactCache = null;
 
-                        await msg.reply(
-                            `✅ Telefone atualizado com sucesso! ${saudacao}, *${state.nomeDizimista}*! 🙏\n\n` +
-                            (mainFlow ? mainFlow.message : 'Cadastro vinculado. Use *menu* para ver as opções.')
-                        );
+                            await msg.reply(
+                                `✅ Dispositivo vinculado com sucesso! ${saudacao}, *${state.nomeDizimista}*! 🙏\n\n` +
+                                `O sistema agora irá reconhecê-lo(a) automaticamente nas próximas vezes.\n\n` +
+                                (mainFlow ? mainFlow.message : 'Use *menu* para ver as opções.')
+                            );
+                        } else {
+                            const telNacional = phone.replace(/^55/, '');
+                            await conn.execute(
+                                `UPDATE DIZIMISTAS SET TELEFONE = :tel WHERE ID_DIZIMISTA = :id`,
+                                { tel: telNacional, id: state.idDizimista }
+                            );
+                            console.log(`[CADASTRO] Telefone atualizado para o dizimista ID ${state.idDizimista}`);
+                            // Invalida cache de contatos
+                            dizimistasContactCache = null;
+
+                            await msg.reply(
+                                `✅ Telefone atualizado com sucesso! ${saudacao}, *${state.nomeDizimista}*! 🙏\n\n` +
+                                (mainFlow ? mainFlow.message : 'Cadastro vinculado. Use *menu* para ver as opções.')
+                            );
+                        }
                         userStates[phone] = {
                             flowId: 'main_menu',
                             idDizimista: state.idDizimista,
