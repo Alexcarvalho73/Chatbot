@@ -392,7 +392,7 @@ const internalFunctions = {
         let isLid = false;
         const originalDigits = phone.replace(/\D/g, '');
 
-        if (originalDigits.length > 14) {
+        if (originalDigits.length >= 14) {
             isLid = true;
             cleanPhone = originalDigits; // Usa o numero completo sem limpar prefixos para LIDs
         } else {
@@ -1848,7 +1848,7 @@ client.on('message_create', async msg => {
                     if (resCPF.rows.length > 0) {
                         const diz = resCPF.rows[0];
                         const telAtual = diz.TELEFONE ? diz.TELEFONE.replace(/\D/g, '') : '';
-                        const isLid = phone.replace(/\D/g, '').length > 14;
+                        const isLid = phone.replace(/\D/g, '').length >= 14;
                         userStates[phone] = {
                             flowId: 'cadastro_confirmar_telefone',
                             idDizimista: diz.ID_DIZIMISTA,
@@ -1906,7 +1906,7 @@ client.on('message_create', async msg => {
                     try {
                         conn = await getOracleConnection();
                         const rawPhoneStr = phone.replace(/\D/g, '');
-                        const isLidCheck = state.isLid || rawPhoneStr.length > 14;
+                        const isLidCheck = state.isLid || rawPhoneStr.length >= 14;
                         const mainFlow = chatFlows['main_menu'];
                         const hour = new Date().getHours();
                         let saudacao = 'Boa noite';
