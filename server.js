@@ -1175,7 +1175,7 @@ const client = new Client({
             '--disable-gpu',
             '--disable-extensions',
             '--no-zygote',
-            '--js-flags="--max-old-space-size=2048"',
+            '--js-flags=--max-old-space-size=2048',
             '--disable-site-isolation-trials',
             '--memory-pressure-off'
         ],
