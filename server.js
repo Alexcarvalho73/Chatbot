@@ -694,10 +694,12 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     3. date: string (a data do pagamento no formato YYYY-MM-DD).
     4. payee_matches: booleano (true se o recebedor for a chave "${chavePix}" ou parecer ser a Paróquia, false caso contrário).
     5. auth_code: string (O código alfanumérico longo que fica LOGO ABAIXO da palavra "Autenticação" ou "Autenticacao". Se não existir essa palavra exata, procure então pelo "ID da transação". É crucial dar prioridade absoluta para pegar a Autenticação se ela estiver na imagem. Se não houver nenhum dos dois, envie uma string vazia).
-    6. raw_data: string (Transcreva todos os dados relevantes legíveis no recibo. Nomes, instituições, CPFs, descrições, histórico, banco, dados de quem pagou e quem recebeu. Coloque tudo formatado em linhas separadas por \\n).
+    6. payer_name: string (O nome completo ou parcial de quem realizou o pagamento/depositante. Se não houver, envie uma string vazia).
+    7. payer_cpf: string (O CPF de quem realizou o pagamento, mesmo que mascarado, ex: ***.123.456-**. Se não houver, envie uma string vazia).
+    8. raw_data: string (Transcreva todos os dados relevantes legíveis no recibo. Nomes, instituições, CPFs, descrições, histórico, banco, dados de quem pagou e quem recebeu. Coloque tudo formatado em linhas separadas por \\n).
     
     Exemplo de saída esperada:
-    {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true, "auth_code": "E00360305202401011234a56b78c90d", "raw_data": "Pagador: João\\nRecebedor: Paróquia\\nInstituição: Banco do Brasil"}`;
+    {"is_receipt": true, "value": 50.00, "date": "2026-05-17", "payee_matches": true, "auth_code": "E00360305202401011234a56b78c90d", "payer_name": "João da Silva", "payer_cpf": "***.123.456-**", "raw_data": "Pagador: João\\nRecebedor: Paróquia\\nInstituição: Banco do Brasil"}`;
 
     const requestBody = JSON.stringify({
         contents: [
@@ -747,6 +749,102 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
         req.write(requestBody);
         req.end();
     });
+}
+
+async function buscarDizimistasPorNomeCpfTelefone(queryStr, conn) {
+    const limpo = (queryStr || '').trim();
+    if (!limpo) return [];
+
+    const numLimpo = limpo.replace(/\D/g, ''); // Extract only digits
+    let query = `
+        SELECT ID_DIZIMISTA, NOME, APELIDO, CPF, TELEFONE
+        FROM DIZIMISTAS
+        WHERE STATUS = 1 AND (
+            UPPER(NOME) LIKE UPPER(:nomeLike) OR 
+            UPPER(APELIDO) LIKE UPPER(:nomeLike)
+    `;
+    let params = {
+        nomeLike: '%' + limpo + '%'
+    };
+
+    if (numLimpo.length >= 4) {
+        query += ` OR REGEXP_REPLACE(CPF, '[^0-9]', '') LIKE :numLike OR REGEXP_REPLACE(TELEFONE, '[^0-9]', '') LIKE :numLike `;
+        params.numLike = '%' + numLimpo + '%';
+    }
+
+    query += ` )`;
+
+    try {
+        const result = await conn.execute(query, params);
+        return result.rows;
+    } catch (err) {
+        console.error('Erro buscarDizimistasPorNomeCpfTelefone:', err);
+        return [];
+    }
+}
+
+async function continuarProcessamentoRecibo(msg, phone, dadosRecibo, idDizimista, nomeDizimista, base64Image) {
+    const meses_ref = gerarMesesReferencia();
+    let conn;
+    let pagosMap = {};
+    try {
+        conn = await getOracleConnection();
+        const res = await conn.execute(`
+            SELECT COMPETENCIA, SUM(VALOR) as TOTAL
+            FROM RECEBIMENTOS
+            WHERE ID_DIZIMISTA = :id AND STATUS IN (1, 2)
+            GROUP BY COMPETENCIA
+        `, { id: idDizimista });
+        res.rows.forEach(r => { pagosMap[r.COMPETENCIA] = r.TOTAL; });
+    } catch(dbErr) {
+        console.error('Erro ao buscar historico:', dbErr);
+    } finally {
+        if (conn) await conn.close();
+    }
+
+    let resposta = `✅ *Comprovante Identificado!*\n`;
+    resposta += `👤 *Dizimista:* ${nomeDizimista}\n`;
+    resposta += `*Valor:* R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}\n`;
+    const [a, m, d] = dadosRecibo.date.split('-');
+    resposta += `*Data:* ${d}/${m}/${a}\n`;
+    resposta += `*Autenticação:* ${dadosRecibo.auth_code || 'Não encontrada na imagem'}\n`;
+    if (dadosRecibo.raw_data) {
+        resposta += `\n📄 *Dados Extraídos do Recibo:*\n_${dadosRecibo.raw_data.trim()}_\n\n`;
+    } else {
+        resposta += `\n`;
+    }
+    resposta += `📊 *Relação de Competências:*\n`;
+    
+    let opcoesDisponiveis = [];
+    let countOpcoes = 1;
+    meses_ref.forEach((comp) => {
+        const valor = pagosMap[comp] || 0;
+        if (valor > 0) {
+            resposta += `✅ ${comp}: R$ ${valor.toFixed(2).replace('.', ',')} (Já lançado)\n`;
+        } else {
+            resposta += `*${countOpcoes}* - ${comp}: pendente\n`;
+            opcoesDisponiveis.push({ num: countOpcoes, comp: comp });
+            countOpcoes++;
+        }
+    });
+    
+    resposta += `\nPara confirmar o lançamento de R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}, digite o *NÚMERO* correspondente ao mês listado acima (somente os pendentes). Ou digite *CANCELAR*.`;
+
+    userStates[phone] = {
+        flowId: 'processar_competencia_recibo',
+        idDizimista: idDizimista,
+        nomeDizimista: nomeDizimista,
+        reciboData: {
+            valor: dadosRecibo.value,
+            dataPagamento: `${d}/${m}/${a}`,
+            dataDB: dadosRecibo.date, // Formato YYYY-MM-DD
+            authCode: dadosRecibo.auth_code || null,
+            rawData: dadosRecibo.raw_data || '',
+            opcoes: opcoesDisponiveis,
+            base64Image: base64Image
+        }
+    };
+    await msg.reply(resposta);
 }
 
 function gerarMesesReferencia() {
@@ -1164,118 +1262,87 @@ client.on('message_create', async msg => {
         try {
             // --- DETECÇÃO DE RECIBO DE PAGAMENTO (MÍDIA) ---
             if (msg.hasMedia) {
-                // Verificar se o usuário já é identificado (ou identificá-lo)
-                let state = userStates[phone];
-                if (!state || (!state.idDizimista)) {
-                    const userData = await internalFunctions.buscarDizimistaPorTelefone(phone);
-                    if (userData) {
-                        if (!state) state = {};
-                        state.idDizimista = userData.id;
-                        state.nomeDizimista = userData.nome;
-                        state.apelidoDizimista = userData.apelido;
-                        userStates[phone] = state;
-                    }
-                }
+                await msg.reply('⏳ Estou analisando a imagem enviada. Um momento...');
+                try {
+                    const media = await msg.downloadMedia();
+                    if (media && (media.mimetype.startsWith('image/') || media.mimetype === 'application/pdf')) {
+                        const chavePix = systemConfig.chavePixParoquia || "Paróquia";
+                        const dadosRecibo = await parseReceiptWithGemini(media.data, media.mimetype, chavePix);
+                        console.log("[GEMINI EXTRACTION]:", dadosRecibo);
+                        
+                        if (dadosRecibo.is_receipt) {
+                            if (!dadosRecibo.payee_matches) {
+                                await msg.reply('⚠️ Este comprovante não parece ter sido pago para a chave PIX da nossa Paróquia. Se isso for um erro, contate a secretaria.');
+                                return;
+                            }
 
-                if (state && state.idDizimista) {
-                    await msg.reply('⏳ Estou analisando a imagem enviada. Um momento...');
-                    try {
-                        const media = await msg.downloadMedia();
-                        if (media && (media.mimetype.startsWith('image/') || media.mimetype === 'application/pdf')) {
-                            const chavePix = systemConfig.chavePixParoquia || "Paróquia";
-                            const dadosRecibo = await parseReceiptWithGemini(media.data, media.mimetype, chavePix);
-                            console.log("[GEMINI EXTRACTION]:", dadosRecibo);
-                            
-                            if (dadosRecibo.is_receipt) {
-                                if (!dadosRecibo.payee_matches) {
-                                    await msg.reply('⚠️ Este comprovante não parece ter sido pago para a chave PIX da nossa Paróquia. Se isso for um erro, contate a secretaria.');
+                            let conn;
+                            try {
+                                conn = await getOracleConnection();
+                                // Validação de Duplicidade de Autenticação
+                                if (dadosRecibo.auth_code && dadosRecibo.auth_code.trim() !== '') {
+                                    const resAuth = await conn.execute(`
+                                        SELECT COUNT(*) as QTD FROM RECEBIMENTOS WHERE AUTENTICACAO = :auth
+                                    `, { auth: dadosRecibo.auth_code.trim() });
+                                    if (resAuth.rows[0].QTD > 0) {
+                                        await msg.reply('⚠️ *Atenção:* Identifiquei que este comprovante já foi enviado e registrado no sistema anteriormente (Código de Autenticação duplicado). Não é possível enviar o mesmo recibo mais de uma vez.');
+                                        return;
+                                    }
+                                }
+
+                                // Busca dizimista pelos dados do recibo
+                                let queryStr = dadosRecibo.payer_cpf || dadosRecibo.payer_name || '';
+                                let dizimistasEncontrados = await buscarDizimistasPorNomeCpfTelefone(queryStr, conn);
+
+                                if (dizimistasEncontrados.length === 1) {
+                                    const d = dizimistasEncontrados[0];
+                                    // Pede confirmacao
+                                    userStates[phone] = {
+                                        flowId: 'confirmar_dizimista_recibo',
+                                        dizimistaCanditado: d,
+                                        dadosRecibo: dadosRecibo,
+                                        base64Image: media.data
+                                    };
+                                    await msg.reply(`Identifiquei que este comprovante pertence a *${d.NOME}*.\n\nConfirma?\n1 - Sim\n2 - Não`);
+                                    return;
+                                } else if (dizimistasEncontrados.length > 1) {
+                                    userStates[phone] = {
+                                        flowId: 'selecionar_dizimista_recibo',
+                                        dizimistasCandidatos: dizimistasEncontrados,
+                                        dadosRecibo: dadosRecibo,
+                                        base64Image: media.data
+                                    };
+                                    let msgOpcoes = `Identifiquei mais de um cadastro com os dados do recibo. Responda com o *NÚMERO* correspondente ao dizimista correto:\n\n`;
+                                    dizimistasEncontrados.forEach((d, idx) => {
+                                        msgOpcoes += `*${idx + 1}* - ${d.NOME}\n`;
+                                    });
+                                    msgOpcoes += `\n*0* - Nenhum destes / Digitar manualmente`;
+                                    await msg.reply(msgOpcoes);
+                                    return;
+                                } else {
+                                    userStates[phone] = {
+                                        flowId: 'buscar_dizimista_recibo',
+                                        dadosRecibo: dadosRecibo,
+                                        base64Image: media.data
+                                    };
+                                    await msg.reply('Não consegui identificar com certeza o dizimista pelo comprovante.\n\nPor favor, digite o *Nome*, *CPF* ou *Telefone* de quem realizou o pagamento para eu buscar no sistema:');
                                     return;
                                 }
 
-                                // Recebeu os dados, vamos listar as ultimas 6 competencias e 3 para frente
-                                const meses_ref = gerarMesesReferencia();
-                                let conn;
-                                let pagosMap = {};
-                                try {
-                                    conn = await getOracleConnection();
-                                    
-                                    // Validação de Duplicidade de Autenticação
-                                    if (dadosRecibo.auth_code && dadosRecibo.auth_code.trim() !== '') {
-                                        const resAuth = await conn.execute(`
-                                            SELECT COUNT(*) as QTD FROM RECEBIMENTOS WHERE AUTENTICACAO = :auth
-                                        `, { auth: dadosRecibo.auth_code.trim() });
-                                        if (resAuth.rows[0].QTD > 0) {
-                                            await msg.reply('⚠️ *Atenção:* Identifiquei que este comprovante já foi enviado e registrado no sistema anteriormente (Código de Autenticação duplicado). Não é possível enviar o mesmo recibo mais de uma vez.');
-                                            return;
-                                        }
-                                    }
-
-                                    const res = await conn.execute(`
-                                        SELECT COMPETENCIA, SUM(VALOR) as TOTAL
-                                        FROM RECEBIMENTOS
-                                        WHERE ID_DIZIMISTA = :id AND STATUS IN (1, 2)
-                                        GROUP BY COMPETENCIA
-                                    `, { id: state.idDizimista });
-                                    res.rows.forEach(r => { pagosMap[r.COMPETENCIA] = r.TOTAL; });
-                                } catch(dbErr) {
-                                    console.error('Erro ao buscar historico:', dbErr);
-                                } finally {
-                                    if (conn) await conn.close();
-                                }
-
-                                let resposta = `✅ *Comprovante Identificado!*\n`;
-                                resposta += `*Valor:* R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}\n`;
-                                const [a, m, d] = dadosRecibo.date.split('-');
-                                resposta += `*Data:* ${d}/${m}/${a}\n`;
-                                resposta += `*Autenticação:* ${dadosRecibo.auth_code || 'Não encontrada na imagem'}\n`;
-                                if (dadosRecibo.raw_data) {
-                                    resposta += `\n📄 *Dados Extraídos do Recibo:*\n_${dadosRecibo.raw_data.trim()}_\n\n`;
-                                } else {
-                                    resposta += `\n`;
-                                }
-                                resposta += `📊 *Relação de Competências:*\n`;
-                                
-                                let opcoesDisponiveis = [];
-                                let countOpcoes = 1;
-                                meses_ref.forEach((comp) => {
-                                    const valor = pagosMap[comp] || 0;
-                                    if (valor > 0) {
-                                        resposta += `✅ ${comp}: R$ ${valor.toFixed(2).replace('.', ',')} (Já lançado)\n`;
-                                    } else {
-                                        resposta += `*${countOpcoes}* - ${comp}: pendente\n`;
-                                        opcoesDisponiveis.push({ num: countOpcoes, comp: comp });
-                                        countOpcoes++;
-                                    }
-                                });
-                                
-                                resposta += `\nPara confirmar o lançamento de R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}, digite o *NÚMERO* correspondente ao mês listado acima (somente os pendentes). Ou digite *CANCELAR*.`;
-
-                                // Guardar no estado para o próximo passo
-                                userStates[phone] = {
-                                    ...state,
-                                    flowId: 'processar_competencia_recibo',
-                                    reciboData: {
-                                        valor: dadosRecibo.value,
-                                        dataPagamento: `${d}/${m}/${a}`,
-                                        dataDB: dadosRecibo.date, // Formato YYYY-MM-DD
-                                        authCode: dadosRecibo.auth_code || null,
-                                        rawData: dadosRecibo.raw_data || '',
-                                        opcoes: opcoesDisponiveis,
-                                        base64Image: media.data
-                                    }
-                                };
-                                await msg.reply(resposta);
-                                return; // Fim do processamento da imagem
-                            } else {
-                                await msg.reply('⚠️ A imagem enviada não parece ser um comprovante de pagamento válido.');
-                                return;
+                            } catch(dbErr) {
+                                console.error('Erro ao buscar historico:', dbErr);
+                            } finally {
+                                if (conn) await conn.close();
                             }
+                        } else {
+                            await msg.reply('⚠️ A imagem enviada não parece ser um comprovante de pagamento válido.');
+                            return;
                         }
-                    } catch (mediaErr) {
-                        console.error('Erro ao processar mídia com Gemini:', mediaErr);
-                        await msg.reply(`⚠️ Houve um erro ao tentar ler o recibo: ${mediaErr.message}`);
-                        return;
                     }
+                } catch (mediaErr) {
+                    console.error('Erro ao processar mídia com Gemini:', mediaErr);
+                    await msg.reply(`⚠️ Houve um erro ao tentar ler o recibo: ${mediaErr.message}`);
+                    return;
                 }
             }
 
@@ -2213,6 +2280,73 @@ client.on('message_create', async msg => {
                     if (conn) await conn.close();
                 }
 
+            } else if (state.flowId === 'confirmar_dizimista_recibo') {
+                if (text === '1' || text === 'sim' || text === 's') {
+                    const d = state.dizimistaCanditado;
+                    await continuarProcessamentoRecibo(msg, phone, state.dadosRecibo, d.ID_DIZIMISTA, d.NOME, state.base64Image);
+                } else {
+                    userStates[phone] = {
+                        flowId: 'buscar_dizimista_recibo',
+                        dadosRecibo: state.dadosRecibo,
+                        base64Image: state.base64Image
+                    };
+                    await msg.reply('Tudo bem. Por favor, digite o *Nome*, *CPF* ou *Telefone* do dizimista correto para eu buscar no sistema:');
+                }
+            } else if (state.flowId === 'selecionar_dizimista_recibo') {
+                const textNum = parseInt(text);
+                const candidatos = state.dizimistasCandidatos;
+                if (!isNaN(textNum) && textNum > 0 && textNum <= candidatos.length) {
+                    const d = candidatos[textNum - 1];
+                    await continuarProcessamentoRecibo(msg, phone, state.dadosRecibo, d.ID_DIZIMISTA, d.NOME, state.base64Image);
+                } else if (text === '0') {
+                    userStates[phone] = {
+                        flowId: 'buscar_dizimista_recibo',
+                        dadosRecibo: state.dadosRecibo,
+                        base64Image: state.base64Image
+                    };
+                    await msg.reply('Tudo bem. Por favor, digite o *Nome*, *CPF* ou *Telefone* do dizimista correto para eu buscar no sistema:');
+                } else {
+                    await msg.reply('Opção inválida. Digite o número correspondente na lista, ou 0 para buscar manualmente.');
+                }
+            } else if (state.flowId === 'buscar_dizimista_recibo') {
+                if (!text || text.length < 3) {
+                    await msg.reply('Por favor, digite pelo menos 3 letras ou números para eu realizar a busca.');
+                    return;
+                }
+                let conn;
+                try {
+                    conn = await getOracleConnection();
+                    let dizimistasEncontrados = await buscarDizimistasPorNomeCpfTelefone(text, conn);
+                    if (dizimistasEncontrados.length === 1) {
+                        const d = dizimistasEncontrados[0];
+                        userStates[phone] = {
+                            flowId: 'confirmar_dizimista_recibo',
+                            dizimistaCanditado: d,
+                            dadosRecibo: state.dadosRecibo,
+                            base64Image: state.base64Image
+                        };
+                        await msg.reply(`Encontrei o cadastro de *${d.NOME}*.\n\nConfirma?\n1 - Sim\n2 - Não`);
+                    } else if (dizimistasEncontrados.length > 1) {
+                        userStates[phone] = {
+                            flowId: 'selecionar_dizimista_recibo',
+                            dizimistasCandidatos: dizimistasEncontrados,
+                            dadosRecibo: state.dadosRecibo,
+                            base64Image: state.base64Image
+                        };
+                        let msgOpcoes = `Encontrei mais de um cadastro. Responda com o *NÚMERO* correspondente:\n\n`;
+                        dizimistasEncontrados.forEach((d, idx) => {
+                            msgOpcoes += `*${idx + 1}* - ${d.NOME}\n`;
+                        });
+                        msgOpcoes += `\n*0* - Nenhum destes (tentar outra busca)`;
+                        await msg.reply(msgOpcoes);
+                    } else {
+                        await msg.reply('Não encontrei nenhum cadastro com essa informação. Tente digitar de outra forma (outro nome, ou telefone/CPF com todos os números):');
+                    }
+                } catch(dbErr) {
+                    console.error('Erro buscar_dizimista_recibo:', dbErr);
+                } finally {
+                    if (conn) await conn.close();
+                }
             } else if (state.flowId === 'processar_competencia_recibo') {
                 const textNum = parseInt(text);
                 const recibo = state.reciboData;
