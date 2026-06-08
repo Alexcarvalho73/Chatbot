@@ -751,32 +751,49 @@ async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
     });
 }
 
-async function buscarDizimistasPorNomeCpfTelefone(queryStr, conn) {
-    const limpo = (queryStr || '').trim();
-    if (!limpo) return [];
+async function buscarDizimistasPorNomeCpfTelefone(termo1, termo2, conn) {
+    const t1 = (termo1 || '').trim();
+    const t2 = (termo2 || '').trim();
+    if (!t1 && !t2) return [];
 
-    const numLimpo = limpo.replace(/\D/g, ''); // Extract only digits
     let query = `
         SELECT ID_DIZIMISTA, NOME, APELIDO, CPF, TELEFONE
         FROM DIZIMISTAS
         WHERE STATUS = 1 AND (
-            UPPER(NOME) LIKE UPPER(:nomeLike) OR 
-            UPPER(APELIDO) LIKE UPPER(:nomeLike)
+            1=0
     `;
-    let params = {
-        nomeLike: '%' + limpo + '%'
+    let params = {};
+
+    const addTerm = (term, idx) => {
+        if (!term) return;
+        const numLimpo = term.replace(/\D/g, '');
+        if (term.length >= 3) {
+            query += ` OR UPPER(NOME) LIKE UPPER(:nome${idx}) OR UPPER(APELIDO) LIKE UPPER(:nome${idx}) `;
+            params[`nome${idx}`] = '%' + term + '%';
+        }
+        if (numLimpo.length >= 4) {
+            query += ` OR REGEXP_REPLACE(CPF, '[^0-9]', '') LIKE :num${idx} OR REGEXP_REPLACE(TELEFONE, '[^0-9]', '') LIKE :num${idx} `;
+            params[`num${idx}`] = '%' + numLimpo + '%';
+        }
     };
 
-    if (numLimpo.length >= 4) {
-        query += ` OR REGEXP_REPLACE(CPF, '[^0-9]', '') LIKE :numLike OR REGEXP_REPLACE(TELEFONE, '[^0-9]', '') LIKE :numLike `;
-        params.numLike = '%' + numLimpo + '%';
-    }
+    addTerm(t1, 1);
+    addTerm(t2, 2);
 
     query += ` )`;
 
     try {
         const result = await conn.execute(query, params);
-        return result.rows;
+        // Filtra possíveis duplicados em memória para não alterar muito a query (Oracle 11g-friendly)
+        const uniqueRows = [];
+        const ids = new Set();
+        for (const row of result.rows) {
+            if (!ids.has(row.ID_DIZIMISTA)) {
+                ids.add(row.ID_DIZIMISTA);
+                uniqueRows.push(row);
+            }
+        }
+        return uniqueRows;
     } catch (err) {
         console.error('Erro buscarDizimistasPorNomeCpfTelefone:', err);
         return [];
@@ -1291,8 +1308,7 @@ client.on('message_create', async msg => {
                                 }
 
                                 // Busca dizimista pelos dados do recibo
-                                let queryStr = dadosRecibo.payer_cpf || dadosRecibo.payer_name || '';
-                                let dizimistasEncontrados = await buscarDizimistasPorNomeCpfTelefone(queryStr, conn);
+                                let dizimistasEncontrados = await buscarDizimistasPorNomeCpfTelefone(dadosRecibo.payer_name, dadosRecibo.payer_cpf, conn);
 
                                 if (dizimistasEncontrados.length === 1) {
                                     const d = dizimistasEncontrados[0];
@@ -2316,7 +2332,7 @@ client.on('message_create', async msg => {
                 let conn;
                 try {
                     conn = await getOracleConnection();
-                    let dizimistasEncontrados = await buscarDizimistasPorNomeCpfTelefone(text, conn);
+                    let dizimistasEncontrados = await buscarDizimistasPorNomeCpfTelefone(text, null, conn);
                     if (dizimistasEncontrados.length === 1) {
                         const d = dizimistasEncontrados[0];
                         userStates[phone] = {
