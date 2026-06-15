@@ -1514,7 +1514,7 @@ client.on('message_create', async msg => {
                 'cadastro_cpf', 'cadastro_confirmar_telefone', 'cadastro_nome',
                 'cadastro_cpf_novo', 'cadastro_email', 'cadastro_cep',
                 'cadastro_endereco', 'cadastro_nascimento',
-                'pastoral_participar', 'pastoral_selecao'
+                'pastoral_participar', 'pastoral_selecao', 'cadastro_telefone_busca'
             ];
             if (isIncoerente && multiStepFlows.includes(state.flowId)) {
                 console.log(`[INCOERENTE] ${phone} digitou entrada inválida no fluxo ${state.flowId}: "${text}"`);
@@ -1972,7 +1972,7 @@ client.on('message_create', async msg => {
                             );
                         }
                     } else {
-                        // CPF não encontrado → valida dígitos antes de abrir cadastro
+                        // CPF não encontrado → valida dígitos antes de buscar por telefone
                         if (!validarCPF(cpfDigitado)) {
                             await msg.reply(
                                 `❌ O CPF *${cpfDigitado}* é inválido (dígitos verificadores incorretos).\n\n` +
@@ -1981,12 +1981,12 @@ client.on('message_create', async msg => {
                             // Mantém o flowId 'cadastro_cpf' para nova tentativa
                             return;
                         }
-                        // CPF válido e não cadastrado → inicia cadastro completo
-                        userStates[phone] = { flowId: 'cadastro_nome', cpf: cpfDigitado };
+                        // CPF válido e não cadastrado → solicita celular para busca
+                        userStates[phone] = { flowId: 'cadastro_telefone_busca', cpf: cpfDigitado };
                         await msg.reply(
-                            `Não encontramos nenhum cadastro com esse CPF.\n\n` +
-                            `Vamos criar seu cadastro! 📝\n\n` +
-                            `Por favor, informe seu *Nome Completo*:`
+                            `Não encontramos nenhum cadastro com esse CPF. 🔍\n\n` +
+                            `Por favor, informe o seu número de *celular com DDD* (apenas números, ex: 11999999999) para buscarmos pelo telefone:\n\n` +
+                            `*Lembre-se:* Digite o DDD com 2 dígitos e o número do celular com 9 dígitos.`
                         );
                     }
                 } catch (err) {
@@ -1995,6 +1995,63 @@ client.on('message_create', async msg => {
                     delete userStates[phone];
                 } finally {
                     if (conn) await conn.close();
+                }
+
+            } else if (state.flowId === 'cadastro_telefone_busca') {
+                // ── Etapa: Usuário informou telefone para busca ──
+                let telDigitado = text.replace(/\D/g, '');
+                if (telDigitado.startsWith('55') && telDigitado.length > 11) {
+                    telDigitado = telDigitado.substring(2);
+                }
+                if (telDigitado.length !== 11) {
+                    await msg.reply(
+                        `❌ Número de celular inválido.\n\n` +
+                        `Por favor, informe o seu número de celular com *DDD* (apenas números, ex: 11999999999) para buscarmos pelo telefone:\n\n` +
+                        `*Lembre-se:* Digite o DDD com 2 dígitos e o número do celular com 9 dígitos.`
+                    );
+                    return;
+                }
+
+                try {
+                    const userData = await internalFunctions.buscarDizimistaPorTelefone(telDigitado);
+                    if (userData) {
+                        const isLid = phone.replace(/\D/g, '').length >= 14;
+                        userStates[phone] = {
+                            flowId: 'cadastro_confirmar_telefone',
+                            idDizimista: userData.id,
+                            nomeDizimista: userData.nome,
+                            isLid: isLid
+                        };
+                        if (isLid) {
+                            await msg.reply(
+                                `✅ Encontramos um cadastro para o telefone informado!\n\n` +
+                                `*Nome:* ${userData.nome}\n\n` +
+                                `O número de onde você está falando aparece oculto por políticas de privacidade do WhatsApp (como um ID de dispositivo interno).\n\n` +
+                                `Deseja *vincular este dispositivo* ao seu cadastro para não precisar digitar o CPF/telefone nas próximas vezes?\n\n` +
+                                `Digite *S* para confirmar ou *N* para cancelar.`
+                            );
+                        } else {
+                            await msg.reply(
+                                `✅ Encontramos um cadastro para o telefone informado!\n\n` +
+                                `*Nome:* ${userData.nome}\n\n` +
+                                `Deseja atualizar o telefone cadastrado para o número atual que está sendo usado?\n\n` +
+                                `Digite *S* para confirmar ou *N* para cancelar.`
+                            );
+                        }
+                    } else {
+                        // Não encontrado → inicia cadastro completo preservando o CPF da etapa anterior
+                        const cpfAnterior = state.cpf;
+                        userStates[phone] = { flowId: 'cadastro_nome', cpf: cpfAnterior };
+                        await msg.reply(
+                            `Não encontramos nenhum cadastro com esse número de celular.\n\n` +
+                            `Vamos criar seu cadastro! 📝\n\n` +
+                            `Por favor, informe seu *Nome Completo*:`
+                        );
+                    }
+                } catch (err) {
+                    console.error('[CADASTRO] Erro ao buscar telefone:', err);
+                    await msg.reply('Ocorreu um erro ao buscar o telefone. Tente novamente mais tarde.');
+                    delete userStates[phone];
                 }
 
             } else if (state.flowId === 'cadastro_confirmar_telefone') {
