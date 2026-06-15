@@ -1159,10 +1159,26 @@ app.post('/api/config', (req, res) => {
 });
 // ------------------------------------
 
+// --- Endpoint para depuração de tela (Screenshot) ---
+app.get('/api/screenshot', async (req, res) => {
+    if (client && client.pupPage) {
+        try {
+            const screenshot = await client.pupPage.screenshot({ encoding: 'base64' });
+            res.setHeader('Content-Type', 'text/html');
+            res.send(`<img src="data:image/png;base64,${screenshot}" style="max-width:100%; border:1px solid #ccc;" />`);
+        } catch (e) {
+            res.status(500).send("Erro ao tirar screenshot: " + e.message);
+        }
+    } else {
+        res.status(404).send("Página do Puppeteer não inicializada.");
+    }
+});
+
 const client = new Client({
     authStrategy: new LocalAuth({
         clientId: "main-session"
     }),
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     puppeteer: {
         headless: true,
         protocolTimeout: 120000, // 120s — evita ProtocolError timed out sob carga
