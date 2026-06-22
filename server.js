@@ -28,7 +28,8 @@ function loadConfig() {
     if (fs.existsSync(CONFIG_FILE)) {
         try {
             const data = fs.readFileSync(CONFIG_FILE, 'utf8');
-            systemConfig = JSON.parse(data);
+            const parsed = JSON.parse(data);
+            systemConfig = { ...systemConfig, ...parsed };
             console.log('[CONFIG] Carregada:', systemConfig);
         } catch (err) {
             console.error('[CONFIG] Erro ao carregar:', err);

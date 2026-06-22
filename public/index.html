@@ -483,12 +483,12 @@
                         
                         <div style="margin-top: 10px;">
                             <label style="font-size: 0.85rem; display: block; margin-bottom: 5px; color: var(--text-secondary);">Bot Token do Telegram:</label>
-                            <input type="password" id="config-telegram-token" placeholder="Ex: 123456789:ABCdefGh..." style="margin-bottom: 10px; font-family: monospace;" onchange="updateGlobalConfig()">
+                            <input type="text" id="config-telegram-token" placeholder="Ex: 123456789:ABCdefGh..." style="margin-bottom: 10px; font-family: monospace;" onchange="updateGlobalConfig()" autocomplete="off">
                         </div>
 
                         <div>
                             <label style="font-size: 0.85rem; display: block; margin-bottom: 5px; color: var(--text-secondary);">Chat ID do Telegram (Privado ou Grupo):</label>
-                            <input type="text" id="config-telegram-chatid" placeholder="Ex: 123456789 ou -987654321" style="margin-bottom: 10px; font-family: monospace;" onchange="updateGlobalConfig()">
+                            <input type="text" id="config-telegram-chatid" placeholder="Ex: 123456789 ou -987654321" style="margin-bottom: 10px; font-family: monospace;" onchange="updateGlobalConfig()" autocomplete="off">
                         </div>
 
                         <div style="display: flex; gap: 10px; margin-top: 5px;">
