@@ -18,7 +18,10 @@ let systemConfig = {
     messagingEnabled: true,
     autoReplyEnabled: true,
     geminiApiKey: "",
-    chavePixParoquia: ""
+    chavePixParoquia: "",
+    telegramToken: "",
+    telegramChatId: "",
+    telegramAlertsEnabled: false
 };
 
 function loadConfig() {
@@ -41,6 +44,63 @@ function saveConfig() {
         console.error('[CONFIG] Erro ao salvar:', err);
     }
 }
+
+// Envio de alertas para o Telegram
+function sendTelegramAlertDirect(token, chatId, text) {
+    return new Promise((resolve, reject) => {
+        if (!token || !chatId) {
+            return reject(new Error('Token ou Chat ID não fornecido.'));
+        }
+        
+        const requestBody = JSON.stringify({
+            chat_id: chatId.trim(),
+            text: text,
+            parse_mode: 'Markdown'
+        });
+
+        const https = require('https');
+        const req = https.request({
+            hostname: 'api.telegram.org',
+            path: `/bot${token.trim()}/sendMessage`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(requestBody)
+            }
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => { data += chunk; });
+            res.on('end', () => {
+                if (res.statusCode !== 200) {
+                    return reject(new Error(`Erro Telegram API (${res.statusCode}): ${data}`));
+                }
+                try {
+                    const parsed = JSON.parse(data);
+                    resolve(parsed);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+
+        req.on('error', (e) => reject(e));
+        req.write(requestBody);
+        req.end();
+    });
+}
+
+function sendTelegramAlert(text) {
+    if (!systemConfig.telegramAlertsEnabled || !systemConfig.telegramToken || !systemConfig.telegramChatId) {
+        console.log('[TELEGRAM] Alerta ignorado: desativado ou credenciais ausentes.');
+        return Promise.resolve();
+    }
+    console.log('[TELEGRAM] Enviando alerta...');
+    return sendTelegramAlertDirect(systemConfig.telegramToken, systemConfig.telegramChatId, text)
+        .catch(err => {
+            console.error('[TELEGRAM] Erro ao enviar alerta:', err.message);
+        });
+}
+
 
 loadConfig();
 
@@ -357,6 +417,75 @@ async function loadFlowsFromDB() {
     }
 }
 
+let lastHealthCheckHour = -1;
+
+async function performHealthCheck(hour) {
+    let conn;
+    try {
+        conn = await getOracleConnection();
+        const result = await conn.execute(`
+            SELECT ID_MENSAGENS, DATAHORA FROM MENSAGENS WHERE STATUS = 0
+        `);
+
+        if (result.rows.length === 0) {
+            console.log(`[HEALTH-CHECK] Nenhuma mensagem travada encontrada na checagem das ${hour}:00.`);
+            return;
+        }
+
+        const now = new Date();
+        const thresholdMs = 20 * 60 * 1000; // 20 minutos
+        let stuckMessages = [];
+
+        for (const row of result.rows) {
+            if (row.DATAHORA) {
+                const msgTime = new Date(row.DATAHORA);
+                if (now - msgTime > thresholdMs) {
+                    stuckMessages.push(row.ID_MENSAGENS);
+                }
+            } else {
+                stuckMessages.push(row.ID_MENSAGENS);
+            }
+        }
+
+        if (stuckMessages.length > 0) {
+            console.log(`[HEALTH-CHECK] Alerta! Encontradas ${stuckMessages.length} mensagens travadas no banco.`);
+            await sendTelegramAlert(
+                `🚨 *Chatbot Paróquia - Alerta de Saúde (${hour}:00)* 🚨\n\n` +
+                `Foi detectado que existem *${stuckMessages.length} mensagens travadas* no banco de dados com STATUS = 0 há mais de 20 minutos!\n\n` +
+                `IDs das mensagens: ${stuckMessages.join(', ')}\n\n` +
+                `O chatbot pode estar travado, desconectado ou o navegador Puppeteer pode ter fechado.`
+            );
+        } else {
+            console.log(`[HEALTH-CHECK] Mensagens pendentes encontradas, mas nenhuma está há mais de 20 minutos.`);
+        }
+    } catch (err) {
+        console.error('[HEALTH-CHECK] Erro ao executar checagem de saúde:', err);
+        await sendTelegramAlert(`❌ *Chatbot Paróquia:* Erro ao rodar checagem de saúde das ${hour}:00: ${err.message}`);
+    } finally {
+        if (conn) await conn.close();
+    }
+}
+
+function startHealthCheckScheduler() {
+    console.log('[HEALTH-CHECK] Inicializando monitor de saúde (07:00, 12:00, 18:00)...');
+    
+    // Roda a checagem a cada 1 minuto
+    setInterval(async () => {
+        const now = new Date();
+        const hrs = now.getHours();
+        
+        if (hrs === 7 || hrs === 12 || hrs === 18) {
+            if (lastHealthCheckHour !== hrs) {
+                lastHealthCheckHour = hrs;
+                console.log(`[HEALTH-CHECK] Iniciando verificação programada das ${hrs}:00...`);
+                await performHealthCheck(hrs);
+            }
+        } else {
+            lastHealthCheckHour = -1;
+        }
+    }, 60 * 1000);
+}
+
 async function initialize() {
     console.log('--- System Initialization Started ---');
     try {
@@ -369,6 +498,7 @@ async function initialize() {
 }
 
 initialize();
+startHealthCheckScheduler();
 
 let isReady = false;
 let isInitializing = false;
@@ -1149,13 +1279,34 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-    const { messagingEnabled, autoReplyEnabled, geminiApiKey, chavePixParoquia } = req.body;
+    const { messagingEnabled, autoReplyEnabled, geminiApiKey, chavePixParoquia, telegramToken, telegramChatId, telegramAlertsEnabled } = req.body;
     if (typeof messagingEnabled === 'boolean') systemConfig.messagingEnabled = messagingEnabled;
     if (typeof autoReplyEnabled === 'boolean') systemConfig.autoReplyEnabled = autoReplyEnabled;
     if (typeof geminiApiKey === 'string') systemConfig.geminiApiKey = geminiApiKey;
     if (typeof chavePixParoquia === 'string') systemConfig.chavePixParoquia = chavePixParoquia;
+    if (typeof telegramToken === 'string') systemConfig.telegramToken = telegramToken;
+    if (typeof telegramChatId === 'string') systemConfig.telegramChatId = telegramChatId;
+    if (typeof telegramAlertsEnabled === 'boolean') systemConfig.telegramAlertsEnabled = telegramAlertsEnabled;
     saveConfig();
     res.json({ success: true, config: systemConfig });
+});
+
+app.post('/api/config/test-telegram', async (req, res) => {
+    const { telegramToken, telegramChatId } = req.body;
+    const tokenToUse = telegramToken !== undefined ? telegramToken : systemConfig.telegramToken;
+    const chatIdToUse = telegramChatId !== undefined ? telegramChatId : systemConfig.telegramChatId;
+
+    if (!tokenToUse || !chatIdToUse) {
+        return res.status(400).json({ success: false, error: 'Token ou Chat ID não fornecido.' });
+    }
+
+    try {
+        await sendTelegramAlertDirect(tokenToUse, chatIdToUse, '🔔 *Chatbot Paróquia:* Teste de envio de alerta via Telegram realizado com sucesso! 🎉');
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[TELEGRAM] Erro no envio de teste:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 // ------------------------------------
 
@@ -1228,6 +1379,14 @@ client.on('auth_failure', msg => {
     console.error('AUTHENTICATION FAILURE', msg);
     isInitializing = false;
     io.emit('message', 'Falha na autenticação: ' + msg);
+    sendTelegramAlert(`⚠️ *Chatbot Paróquia:* Falha na Autenticação do WhatsApp! Mensagem: ${msg}`);
+});
+
+client.on('disconnected', reason => {
+    console.error('CLIENT DISCONNECTED', reason);
+    isReady = false;
+    io.emit('message', 'WhatsApp desconectado: ' + reason);
+    sendTelegramAlert(`❌ *Chatbot Paróquia:* O WhatsApp foi desconectado! Motivo: ${reason}`);
 });
 
 client.on('message_create', async msg => {
@@ -2809,6 +2968,7 @@ async function execMessageRoutine() {
         }
     } catch (err) {
         console.error('[ROUTINE] Erro na busca de mensagens:', err);
+        sendTelegramAlert('❌ *Chatbot Paróquia:* Erro na rotina de envio de mensagens: ' + err.message);
     } finally {
         if (conn) await conn.close();
         isRoutineRunning = false; // Sempre libera o guard ao terminar
@@ -2823,6 +2983,7 @@ if (fs.existsSync(sessionPath)) {
     client.initialize().catch(err => {
         console.error('Erro na inicialização automática:', err);
         isInitializing = false;
+        sendTelegramAlert('❌ *Chatbot Paróquia:* Falha na inicialização automática do WhatsApp: ' + err.message);
     });
 } else {
     console.log('[WWEB] Nenhuma sessão encontrada. Aguardando comando manual do usuário.');

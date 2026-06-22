@@ -473,6 +473,31 @@
                     </div>
                 </div>
 
+                <div style="background: var(--hover-bg); padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--primary-accent);">
+                    <h4 style="margin-bottom: 15px; color: var(--primary-accent); border-bottom: 1px solid var(--border-color); padding-bottom: 5px;">Alertas e Monitoramento (Telegram)</h4>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                            <input type="checkbox" id="config-telegram-alerts" style="width: 20px; height: 20px; margin-bottom: 0;" onchange="updateGlobalConfig()">
+                            <span><b>Ativar Alertas via Telegram</b></span>
+                        </label>
+                        
+                        <div style="margin-top: 10px;">
+                            <label style="font-size: 0.85rem; display: block; margin-bottom: 5px; color: var(--text-secondary);">Bot Token do Telegram:</label>
+                            <input type="password" id="config-telegram-token" placeholder="Ex: 123456789:ABCdefGh..." style="margin-bottom: 10px; font-family: monospace;" onchange="updateGlobalConfig()">
+                        </div>
+
+                        <div>
+                            <label style="font-size: 0.85rem; display: block; margin-bottom: 5px; color: var(--text-secondary);">Chat ID do Telegram (Privado ou Grupo):</label>
+                            <input type="text" id="config-telegram-chatid" placeholder="Ex: 123456789 ou -987654321" style="margin-bottom: 10px; font-family: monospace;" onchange="updateGlobalConfig()">
+                        </div>
+
+                        <div style="display: flex; gap: 10px; margin-top: 5px;">
+                            <button class="btn btn-ghost" onclick="sendTestTelegramAlert()" style="padding: 6px 12px; font-size: 0.8rem; background: var(--sidebar-bg); display: flex; align-items: center; gap: 5px;">🔔 Enviar Alerta de Teste</button>
+                            <span id="telegram-test-status" style="font-size: 0.8rem; display: flex; align-items: center; color: var(--text-secondary);"></span>
+                        </div>
+                    </div>
+                </div>
+
                 <div id="db-flow-container">
                     <!-- Flows from DB -->
                 </div>
@@ -801,6 +826,9 @@
                 const config = await res.json();
                 document.getElementById('config-messaging').checked = config.messagingEnabled;
                 document.getElementById('config-autoreply').checked = config.autoReplyEnabled;
+                document.getElementById('config-telegram-alerts').checked = config.telegramAlertsEnabled;
+                document.getElementById('config-telegram-token').value = config.telegramToken || '';
+                document.getElementById('config-telegram-chatid').value = config.telegramChatId || '';
             } catch (err) {
                 console.error('Erro ao carregar config global:', err);
             }
@@ -809,17 +837,60 @@
         async function updateGlobalConfig() {
             const messagingEnabled = document.getElementById('config-messaging').checked;
             const autoReplyEnabled = document.getElementById('config-autoreply').checked;
+            const telegramAlertsEnabled = document.getElementById('config-telegram-alerts').checked;
+            const telegramToken = document.getElementById('config-telegram-token').value;
+            const telegramChatId = document.getElementById('config-telegram-chatid').value;
             
             try {
                 await fetch('api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messagingEnabled, autoReplyEnabled })
+                    body: JSON.stringify({ 
+                        messagingEnabled, 
+                        autoReplyEnabled, 
+                        telegramAlertsEnabled, 
+                        telegramToken, 
+                        telegramChatId 
+                    })
                 });
                 console.log('Config global atualizada!');
             } catch (err) {
                 console.error('Erro ao salvar config global:', err);
                 alert('Erro ao salvar configuração!');
+            }
+        }
+
+        async function sendTestTelegramAlert() {
+            const statusEl = document.getElementById('telegram-test-status');
+            const telegramToken = document.getElementById('config-telegram-token').value;
+            const telegramChatId = document.getElementById('config-telegram-chatid').value;
+
+            if (!telegramToken || !telegramChatId) {
+                statusEl.style.color = 'var(--danger)';
+                statusEl.innerText = '⚠️ Token e Chat ID são obrigatórios!';
+                return;
+            }
+
+            statusEl.style.color = 'var(--text-secondary)';
+            statusEl.innerText = '⏳ Enviando...';
+
+            try {
+                const res = await fetch('api/config/test-telegram', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegramToken, telegramChatId })
+                });
+                const result = await res.json();
+                if (res.ok && result.success) {
+                    statusEl.style.color = 'var(--primary-accent)';
+                    statusEl.innerText = '✅ Alerta enviado!';
+                } else {
+                    statusEl.style.color = 'var(--danger)';
+                    statusEl.innerText = '❌ Erro: ' + (result.error || 'Erro desconhecido');
+                }
+            } catch (err) {
+                statusEl.style.color = 'var(--danger)';
+                statusEl.innerText = '❌ Erro na requisição: ' + err.message;
             }
         }
 

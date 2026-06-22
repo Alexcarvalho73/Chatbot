@@ -1,0 +1,87 @@
+===============================================================================
+                       HOW-TO: TESTE E RESOLUÇÃO DO CHATBOT
+===============================================================================
+
+Este documento explica como testar o disparo de mensagens agendadas (que roda a
+cada 10 minutos) e o que fazer caso o servidor pare de enviar mensagens.
+
+-------------------------------------------------------------------------------
+1. DIAGNÓSTICO DO PROBLEMA ATUAL (Resolvido em 17/06/2026)
+-------------------------------------------------------------------------------
+- O que aconteceu: O navegador headless (Chromium/Puppeteer) que roda no servidor 
+  para simular o WhatsApp Web fechou inesperadamente (erro "Target closed").
+- Sintoma: As mensagens agendadas ficaram presas no banco com STATUS = 0 (pendente)
+  e o log do servidor não mostrava a mensagem "Client is ready!".
+- Solução aplicada: Reiniciamos o processo PM2 no servidor. Isso reinicializou o
+  navegador, reconectou o WhatsApp automaticamente usando a sessão salva e 
+  disparou com sucesso as 3 mensagens que estavam travadas (IDs 1353, 1354, 1356).
+
+-------------------------------------------------------------------------------
+2. PASSO A PASSO PARA DETECTAR SE ESTÁ PARADO
+-------------------------------------------------------------------------------
+Se suspeitar que o WhatsApp não está enviando mensagens, siga estes passos:
+
+Passo 2.1: Verifique se existem mensagens pendentes no banco localmente
+Execute o script de verificação no terminal do seu computador:
+  > node check_mensagens.js
+
+Isso mostrará a estrutura da tabela, a quantidade de registros pendentes (STATUS = 0)
+e os últimos 10 registros. Se houver registros pendentes antigos que não mudam
+de status há mais de 10 minutos, o chatbot está travado ou desconectado.
+
+Passo 2.2: Verifique o status do processo no Servidor
+Execute este comando no seu terminal para ver se o PM2 está rodando o app:
+  > ssh -o StrictHostKeyChecking=no -i "C:\Users\admin\DriveVirtual\ProjetosIA\ChatBot\SSHVM\ssh-key-2026-04-15.key" opc@imaculadocoracaomaria.org.br "pm2 status"
+
+O status do processo "chatbot" deve constar como "online".
+
+Passo 2.3: Analise os logs do Servidor
+Verifique o log de saída para ver se ele mostra "Client is ready!" ou se há mensagens de erro:
+  > ssh -o StrictHostKeyChecking=no -i "C:\Users\admin\DriveVirtual\ProjetosIA\ChatBot\SSHVM\ssh-key-2026-04-15.key" opc@imaculadocoracaomaria.org.br "tail -n 100 ~/.pm2/logs/chatbot-out.log"
+
+E verifique os logs de erro para ver se há falhas de conexão/browser crash:
+  > ssh -o StrictHostKeyChecking=no -i "C:\Users\admin\DriveVirtual\ProjetosIA\ChatBot\SSHVM\ssh-key-2026-04-15.key" opc@imaculadocoracaomaria.org.br "tail -n 100 ~/.pm2/logs/chatbot-error.log"
+
+-------------------------------------------------------------------------------
+3. COMO CORRIGIR SE ESTIVER TRAVADO (HOW-TO REINICIAR)
+-------------------------------------------------------------------------------
+Se o chatbot estiver travado, desconectado ou com erro de "Target closed", execute:
+
+  > ssh -o StrictHostKeyChecking=no -i "C:\Users\admin\DriveVirtual\ProjetosIA\ChatBot\SSHVM\ssh-key-2026-04-15.key" opc@imaculadocoracaomaria.org.br "pm2 restart chatbot"
+
+Aguarde cerca de 30 a 60 segundos e verifique se o cliente conectou com sucesso:
+  > ssh -o StrictHostKeyChecking=no -i "C:\Users\admin\DriveVirtual\ProjetosIA\ChatBot\SSHVM\ssh-key-2026-04-15.key" opc@imaculadocoracaomaria.org.br "tail -n 30 ~/.pm2/logs/chatbot-out.log"
+
+Você deve ver a linha:
+  "Client is ready!"
+
+-------------------------------------------------------------------------------
+4. COMO REALIZAR UM TESTE DE ENVIO MANUAL
+-------------------------------------------------------------------------------
+Para validar se o fluxo de 10 minutos está funcionando 100%, faça o seguinte:
+
+1. Acesse o seu banco de dados Oracle e insira um registro de teste na tabela MENSAGENS:
+
+   INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS, TIPO)
+   VALUES ('5565999999999', 'Teste de envio automático do ChatBot', 0, 'T');
+   COMMIT;
+
+   *Nota: Substitua '5565999999999' pelo número real do seu WhatsApp (com DDI 55, DDD e número).*
+
+2. Monitore o banco executando localmente:
+   > node check_mensagens.js
+
+3. Se tudo estiver correto:
+   - A cada 10 minutos o servidor busca registros com STATUS = 0.
+   - O chatbot enviará a mensagem de teste para o número indicado.
+   - O STATUS mudará de 0 para 1 e a coluna RETORNO exibirá "Enviado com sucesso".
+
+4. Caso o número não tenha WhatsApp ou ocorra alguma falha, o STATUS mudará para 2 e a coluna RETORNO descreverá o erro.
+
+-------------------------------------------------------------------------------
+5. CASO SEJA NECESSÁRIO LER O QR CODE NOVAMENTE
+-------------------------------------------------------------------------------
+Se o WhatsApp desconectar da conta e precisar de nova autenticação:
+1. Acesse o painel web no endereço:
+   http://imaculadocoracaomaria.org.br:3000/?token=Alinne05@token
+2. Escaneie o QR Code exibido na tela com o seu celular no WhatsApp (Aparelhos Conectados).
