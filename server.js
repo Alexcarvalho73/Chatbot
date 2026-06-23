@@ -1,3 +1,24 @@
+// Auto-Patch para corrigir erro canCheckStatusRankingPosterGating no whatsapp-web.js
+try {
+    const fs = require('fs');
+    const path = require('path');
+    const utilsPath = path.join(__dirname, 'node_modules', 'whatsapp-web.js', 'src', 'util', 'Injected', 'Utils.js');
+    if (fs.existsSync(utilsPath)) {
+        let content = fs.readFileSync(utilsPath, 'utf8');
+        const targetRegex = /cannotBeRanked:\s*window\s*\.\s*require\(\s*['"]WAWebStatusGatingUtils['"]\s*\)\s*\.\s*canCheckStatusRankingPosterGating\(\s*\),/g;
+        const replacementString = `cannotBeRanked: window.require('WAWebStatusGatingUtils')?.canCheckStatusRankingPosterGating ? window.require('WAWebStatusGatingUtils').canCheckStatusRankingPosterGating() : false,`;
+        
+        if (targetRegex.test(content)) {
+            console.log('[PATCH] Corrigindo bug canCheckStatusRankingPosterGating no whatsapp-web.js...');
+            content = content.replace(targetRegex, replacementString);
+            fs.writeFileSync(utilsPath, content, 'utf8');
+            console.log('[PATCH] Patch aplicado com sucesso!');
+        }
+    }
+} catch (err) {
+    console.error('[PATCH] Falha ao aplicar patch no whatsapp-web.js:', err);
+}
+
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
