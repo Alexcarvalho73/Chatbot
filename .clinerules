@@ -1,0 +1,5 @@
+# Regras de Idioma e Interação
+
+- Qualquer interação com o usuário (perguntas, respostas, explicações) deve ser realizada estritamente em português (do Brasil).
+- Ao executar chamadas de ferramentas, os parâmetros explicativos `toolAction` (ação da ferramenta) e `toolSummary` (resumo da ferramenta) devem ser escritos obrigatoriamente em português.
+- Garanta que as mensagens explicativas antes de cada execução de ferramenta descrevam os passos claramente em português para que o usuário possa acompanhar o progresso.

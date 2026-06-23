@@ -1374,6 +1374,15 @@ client.on('authenticated', () => {
     isInitializing = false;
     console.log('AUTHENTICATED');
     io.emit('authenticated', 'Autenticado com sucesso!');
+
+    // Fallback: Inicia a rotina de envio de mensagens em 30 segundos, caso o evento 'ready' não dispare
+    console.log('[WWEB] Configurando inicialização da rotina via authenticated (fallback)...');
+    setTimeout(() => {
+        if (!messageIntervalFunc) {
+            console.log('[WWEB] Executando fallback da rotina de mensagens via authenticated.');
+            startMessageRoutine();
+        }
+    }, 30000);
 });
 
 client.on('auth_failure', msg => {
