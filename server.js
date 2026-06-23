@@ -1111,19 +1111,34 @@ async function finalizarCadastro(msg, phone) {
         conn = await getOracleConnection();
 
         // --- 1. Grava DIZIMISTAS ---
-        const telNacional = phone.replace(/^55/, '');
+        const rawPhoneStr = phone.replace(/\D/g, '');
+        const isLid = rawPhoneStr.length >= 14;
+        
+        let telNacional = null;
+        let whatsappId = null;
+        
+        if (isLid) {
+            whatsappId = rawPhoneStr;
+            if (dados.telefoneDigitado) {
+                telNacional = dados.telefoneDigitado.replace(/^55/, '').replace(/\D/g, '');
+            }
+        } else {
+            telNacional = phone.replace(/^55/, '').replace(/\D/g, '');
+        }
+
         const fonetica = await generatePhonetics(dados.nome, conn);
-        console.log(`[CADASTRO] Gerando registro para ${dados.nome}. Fonética: "${fonetica}", CPF: ${dados.cpf}`);
+        console.log(`[CADASTRO] Gerando registro para ${dados.nome}. Fonética: "${fonetica}", CPF: ${dados.cpf}, Telefone: ${telNacional}, WhatsApp ID: ${whatsappId}`);
 
         await conn.execute(`
-            INSERT INTO DIZIMISTAS (NOME, FONETICA, CPF, TELEFONE, EMAIL, CEP, ENDERECO, DATA_NASCIMENTO, STATUS)
-            VALUES (:nome, :fonetica, :cpf, :telefone, :email, :cep, :endereco,
+            INSERT INTO DIZIMISTAS (NOME, FONETICA, CPF, TELEFONE, WHATSAPP_ID, EMAIL, CEP, ENDERECO, DATA_NASCIMENTO, STATUS)
+            VALUES (:nome, :fonetica, :cpf, :telefone, :whatsapp_id, :email, :cep, :endereco,
                     TO_DATE(:nascimento, 'DD/MM/YYYY'), 1)
         `, {
             nome: dados.nome,
             fonetica: fonetica,
             cpf: formatarCPF(dados.cpf),
             telefone: telNacional,
+            whatsapp_id: whatsappId,
             email: dados.email,
             cep: dados.cep.replace(/\D/g, ''),
             endereco: dados.endereco,
@@ -2231,7 +2246,7 @@ client.on('message_create', async msg => {
                     } else {
                         // Não encontrado → inicia cadastro completo preservando o CPF da etapa anterior
                         const cpfAnterior = state.cpf;
-                        userStates[phone] = { flowId: 'cadastro_nome', cpf: cpfAnterior };
+                        userStates[phone] = { flowId: 'cadastro_nome', cpf: cpfAnterior, telefoneDigitado: telDigitado };
                         await msg.reply(
                             `Não encontramos nenhum cadastro com esse número de celular.\n\n` +
                             `Vamos criar seu cadastro! 📝\n\n` +
