@@ -323,28 +323,30 @@ async function initOracle() {
             console.log('Table FLOWS created successfully.');
         }
 
-        // Garante que o fluxo 'main_menu' existe
-        const checkFlow = await conn.execute(`
-            SELECT id FROM flows WHERE id = 'main_menu'
-        `);
+        console.log('Seeding/updating default main_menu flow...');
+        const mainMenuData = {
+            id: 'main_menu',
+            triggers: 'menu, ajuda, oi',
+            message: "*Menu da Paróquia* 🙏\n\nEscolha uma opção:\n1️⃣ *Servir*: Novo aplicativo de escala de servos.\n2️⃣ *Missas*: Ver horários das missas do mês.\n3️⃣ *Cancelar Servir*: Cancelar um agendamento de servir.\n\n_Digite o número da opção desejada._",
+            options: JSON.stringify({
+                "1": { "type": "reply", "value": "A partir de agora, a gestão de Escalas é realizada somente pelo novo aplicativo. Acesse o link abaixo para gerenciar suas escalas:\n\nhttps://imaculadocoracaomaria.org.br/escala.html" },
+                "2": { "type": "function", "value": "listarMissas" },
+                "3": { "type": "function", "value": "fluxoCancelarServir" }
+            })
+        };
 
-        if (checkFlow.rows.length === 0) {
-            console.log('Seeding default main_menu flow...');
-            const mainMenuData = {
-                id: 'main_menu',
-                triggers: 'menu, ajuda, oi',
-                message: "*Menu da Paróquia* 🙏\n\nEscolha uma opção:\n1️⃣ *Servir*: Candidatar-se para trabalhar em uma missa.\n2️⃣ *Missas*: Ver horários das missas do mês.\n\n_Digite o número da opção desejada._",
-                options: JSON.stringify({
-                    "1": { "type": "function", "value": "fluxoServir" },
-                    "2": { "type": "function", "value": "listarMissas" }
-                })
-            };
-            await conn.execute(`
-                INSERT INTO flows (id, triggers, message, options) 
-                VALUES (:id, :triggers, :message, :options)
-            `, mainMenuData);
-            console.log('Default main_menu seeded.');
-        }
+        const mergeSql = `
+            MERGE INTO flows f
+            USING (SELECT :id as id FROM dual) src
+            ON (f.id = src.id)
+            WHEN MATCHED THEN
+                UPDATE SET triggers = :triggers, message = :message, options = :options
+            WHEN NOT MATCHED THEN
+                INSERT (id, triggers, message, options) VALUES (:id, :triggers, :message, :options)
+        `;
+
+        await conn.execute(mergeSql, mainMenuData);
+        console.log('Default main_menu flow seeded/updated in database.');
 
         // Verifica se a tabela MENSAGENS existe
         const checkTableMensagens = await conn.execute(`
@@ -638,146 +640,6 @@ const internalFunctions = {
         } catch (err) {
             console.error('Erro listarMissas:', err);
             return "Erro ao buscar missas. Tente novamente mais tarde.";
-        } finally {
-            if (conn) await conn.close();
-        }
-    },
-    fluxoServir: async (msg, contact, userData, pMonthOffset = 0, pForced = false, pOnlyWithVacancies = null) => {
-        const phone = contact.number;
-        const idDizimista = userData.id;
-        const nomeDizimista = userData.apelido || userData.nome;
-
-        // Se for o mês atual, não houver offset forçado e passar do dia 15
-        if (pMonthOffset === 0 && !pForced && new Date().getDate() > 15) {
-            userStates[phone] = {
-                ...userStates[phone],
-                flowId: 'servir_escolha_mes',
-                idDizimista: userData.id,
-                nomeDizimista: userData.nome,
-                apelidoDizimista: userData.apelido
-            };
-            return "O dia 15 já passou. Para qual período deseja ver as missas disponíveis?\n\n1️⃣ - Missas restantes deste mês\n2️⃣ - Missas do próximo mês\n\n*0* - Voltar ao Menu Principal";
-        }
-
-        // Recupera opção de filtro do parâmetro ou do estado salvo
-        const onlyWithVacancies = pOnlyWithVacancies !== null ? pOnlyWithVacancies : userStates[phone]?.onlyWithVacancies;
-
-        if (onlyWithVacancies === undefined || onlyWithVacancies === null) {
-            userStates[phone] = {
-                ...userStates[phone],
-                flowId: 'servir_escolha_filtro',
-                idDizimista: userData.id,
-                nomeDizimista: userData.nome,
-                apelidoDizimista: userData.apelido,
-                monthOffset: pMonthOffset
-            };
-            return "Como você deseja visualizar as missas?\n\n1️⃣ - *Ver Todas* as missas\n2️⃣ - *Somente com Vagas* (ou onde já participo)\n\n*0* - Voltar ao Menu Principal";
-        }
-
-        let conn;
-        try {
-            conn = await getOracleConnection();
-
-            // 2. Buscar Pastorais que ele serve
-            const resPast = await conn.execute(`
-                SELECT ID_PASTORAL FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :id
-            `, { id: idDizimista });
-
-            if (resPast.rows.length === 0) {
-                return `Olá ${nomeDizimista}! Verifiquei que você não está vinculado a nenhuma pastoral no momento.`;
-            }
-
-            const idsPastoral = resPast.rows.map(r => r.ID_PASTORAL);
-
-            // 3. Buscar Missas para essas pastorais (com nome da pastoral e verificação se já está inscrito)
-            const resMissas = await conn.execute(`
-                SELECT m.ID_MISSA, TO_CHAR(TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, m.HORA, m.COMUNIDADE, 
-                       mp.QUANTIDADE_SERVOS, mp.ID_PASTORAL, p.NOME as PASTORAL_NOME,
-                       (SELECT COUNT(*) FROM MISSA_SERVOS ms WHERE ms.ID_MISSA = m.ID_MISSA AND ms.ID_PASTORAL = mp.ID_PASTORAL) as ATUAIS,
-                       (SELECT COUNT(*) FROM MISSA_SERVOS ms WHERE ms.ID_MISSA = m.ID_MISSA AND ms.ID_DIZIMISTA = :idDizimista) as JA_INSCRITO,
-                       (SELECT LISTAGG(NVL(d.APELIDO, d.NOME), ', ') WITHIN GROUP (ORDER BY NVL(d.APELIDO, d.NOME)) 
-                        FROM MISSA_SERVOS ms2 JOIN DIZIMISTAS d ON ms2.ID_DIZIMISTA = d.ID_DIZIMISTA 
-                        WHERE ms2.ID_MISSA = m.ID_MISSA AND ms2.ID_PASTORAL = mp.ID_PASTORAL
-                        AND d.STATUS = 1) as SERVOS_ATUAIS
-                FROM MISSAS m
-                JOIN MISSA_PASTORAL mp ON m.ID_MISSA = mp.ID_MISSA
-                JOIN PASTORAIS p ON mp.ID_PASTORAL = p.ID_PASTORAL
-                WHERE mp.ID_PASTORAL IN (${idsPastoral.join(',')})
-                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= TRUNC(SYSDATE)
-                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), :monthOffset)
-                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') <= LAST_DAY(ADD_MONTHS(TRUNC(SYSDATE, 'MM'), :monthOffset))
-                AND m.STATUS = 1
-                ORDER BY m.DATA_MISSA, m.HORA
-            `, { idDizimista, monthOffset: pMonthOffset });
-
-            if (resMissas.rows.length === 0) {
-                return `Olá ${nomeDizimista}! Não encontrei missas agendadas para as suas pastorais neste período.`;
-            }
-
-            // Aplicar filtro se solicitado
-            let finalRows = resMissas.rows;
-            if (onlyWithVacancies) {
-                finalRows = resMissas.rows.filter(r => (r.QUANTIDADE_SERVOS - r.ATUAIS > 0) || r.JA_INSCRITO > 0);
-            }
-
-            if (finalRows.length === 0) {
-                return `Olá ${nomeDizimista}! Não há missas com vagas abertas para suas pastorais neste período.`;
-            }
-
-            // Guardar no estado para a seleção
-            userStates[phone] = {
-                flowId: 'servir_selecao',
-                idDizimista,
-                nomeDizimista: userData.nome,
-                apelidoDizimista: userData.apelido,
-                monthOffset: pMonthOffset,
-                onlyWithVacancies: onlyWithVacancies,
-                availableMasses: finalRows
-            };
-
-            console.log(`[FLOW] Oferecendo ${finalRows.length} missas para ${nomeDizimista} (Mês Offset: ${pMonthOffset}, Filtro Vagas: ${onlyWithVacancies})`);
-
-            let response = `Olá *${nomeDizimista}*! 👋\nEscolha em qual missa você deseja servir:\n\n`;
-            finalRows.forEach((r, idx) => {
-                let statusMsg = "";
-                let vagasRestantes = r.QUANTIDADE_SERVOS - r.ATUAIS;
-
-                const linhasVagas = [];
-                for (let i = 0; i < vagasRestantes; i++) {
-                    linhasVagas.push("✅ - Disponível");
-                }
-
-                if (vagasRestantes <= 0) {
-                    if (r.JA_INSCRITO > 0) {
-                        statusMsg = "🚩 *Você já está servindo aqui*";
-                    } else {
-                        statusMsg = "❌ - Vagas Esgotadas";
-                    }
-                } else {
-                    if (r.JA_INSCRITO > 0) {
-                        statusMsg = "🚩 *Você já está servindo aqui*\n" + linhasVagas.join('\n');
-                    } else {
-                        statusMsg = linhasVagas.join('\n');
-                    }
-                }
-
-
-                let servosStr = "";
-                if (r.SERVOS_ATUAIS) {
-                    // Separa a string de servos e quebra por linha, colocando o usuario atual em Negrito
-                    const list = r.SERVOS_ATUAIS.split(', ').map(n => n.trim() === nomeDizimista.trim() ? `*${n.trim()}*` : n.trim());
-                    servosStr = `\n${list.join('\n')}`;
-                }
-
-                // O layout final
-                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: *${r.PASTORAL_NOME}*${servosStr}\n${statusMsg}\n\n`;
-            });
-            response += "*0* - Voltar ao Menu Anterior\n*99* - Exibe missas do próximo mês\n\nResponda com o *NÚMERO* da opção desejada.";
-            return response;
-
-        } catch (err) {
-            console.error('Erro fluxoServir:', err);
-            return "Erro ao processar sua solicitação de serviço.";
         } finally {
             if (conn) await conn.close();
         }
@@ -1753,165 +1615,6 @@ client.on('message_create', async msg => {
                         console.error(`Função ${option.value} não encontrada.`);
                         await msg.reply("Erro ao processar opção dinâmica.");
                     }
-                }
-            } else if (state.flowId === 'servir_escolha_mes') {
-                console.log(`[STATE] Usuário ${phone} decidindo mês para servir: ${text}`);
-
-                if (text === '1') {
-                    const result = await internalFunctions.fluxoServir(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 0, true);
-                    await msg.reply(result);
-                } else if (text === '2') {
-                    const result = await internalFunctions.fluxoServir(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, 1, true);
-                    await msg.reply(result);
-                } else if (text === '0') {
-                    const mainFlow = chatFlows['main_menu'];
-                    if (mainFlow) {
-                        await msg.reply(mainFlow.message);
-                        userStates[phone] = {
-                            flowId: 'main_menu',
-                            idDizimista: state.idDizimista,
-                            nomeDizimista: state.nomeDizimista,
-                            apelidoDizimista: state.apelidoDizimista
-                        };
-                    }
-                } else {
-                    await msg.reply("Opção inválida. Digite *1* para este mês, *2* para o próximo mês ou *0* para voltar.");
-                }
-            } else if (state.flowId === 'servir_escolha_filtro') {
-                console.log(`[STATE] Usuário ${phone} decidindo filtro de missas: ${text}`);
-                if (text === '1' || text === '2') {
-                    const onlyWithVacancies = (text === '2');
-                    // Salva no estado para manter o parâmetro ao repetir a lista
-                    state.onlyWithVacancies = onlyWithVacancies;
-                    const result = await internalFunctions.fluxoServir(msg, contact,
-                        { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
-                        state.monthOffset || 0, true, onlyWithVacancies);
-                    await msg.reply(result);
-                } else if (text === '0') {
-                    const mainFlow = chatFlows['main_menu'];
-                    if (mainFlow) {
-                        await msg.reply(mainFlow.message);
-                        userStates[phone] = {
-                            flowId: 'main_menu',
-                            idDizimista: state.idDizimista,
-                            nomeDizimista: state.nomeDizimista,
-                            apelidoDizimista: state.apelidoDizimista
-                        };
-                    }
-                } else {
-                    await msg.reply("Opção inválida. Digite *1* para Ver Todas, *2* para Somente com Vagas ou *0* para voltar ao menu.");
-                }
-            } else if (state.flowId === 'servir_selecao') {
-                console.log(`[STATE] Usuário ${phone} selecionando missa: ${text}`);
-
-                if (text === '0') {
-                    const mainFlow = chatFlows['main_menu'];
-                    if (mainFlow) {
-                        await msg.reply(mainFlow.message);
-                        userStates[phone] = {
-                            flowId: 'main_menu',
-                            idDizimista: state.idDizimista,
-                            nomeDizimista: state.nomeDizimista,
-                            apelidoDizimista: state.apelidoDizimista
-                        };
-                    }
-                    return;
-                }
-
-                if (text === '99') {
-                    const func = internalFunctions.fluxoServir;
-                    const newOffset = (state.monthOffset || 0) + 1;
-                    const result = await func(msg, contact, { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista }, newOffset);
-                    await msg.reply(result);
-                    return;
-                }
-
-                const index = parseInt(text) - 1;
-                if (!isNaN(index) && state.availableMasses && state.availableMasses[index]) {
-                    const selectedMass = state.availableMasses[index];
-
-                    // Verificação em cache: já está inscrito
-                    if (selectedMass.JA_INSCRITO > 0) {
-                        await msg.reply("Você já está inscrito para servir nesta missa! Escolha outra opção ou digite *0* para voltar.");
-                        return;
-                    }
-
-                    // Efetivar candidatura
-                    let conn;
-                    try {
-                        conn = await getOracleConnection();
-
-                        // --- Validação em tempo real (anti-race condition) ---
-                        // Checa vagas ATUAIS diretamente no banco antes de inserir
-                        const vagasCheck = await conn.execute(`
-                        SELECT COUNT(*) as ATUAIS, mp.QUANTIDADE_SERVOS
-                        FROM MISSA_SERVOS ms
-                        JOIN MISSA_PASTORAL mp ON ms.ID_MISSA = mp.ID_MISSA AND ms.ID_PASTORAL = mp.ID_PASTORAL
-                        WHERE ms.ID_MISSA = :m AND ms.ID_PASTORAL = :p
-                        GROUP BY mp.QUANTIDADE_SERVOS
-                    `, { m: selectedMass.ID_MISSA, p: selectedMass.ID_PASTORAL });
-
-                        const vagasRow = vagasCheck.rows[0];
-                        const atuaisDB = vagasRow ? vagasRow.ATUAIS : 0;
-                        const maxServos = vagasRow ? vagasRow.QUANTIDADE_SERVOS : selectedMass.QUANTIDADE_SERVOS;
-
-                        if (atuaisDB >= maxServos) {
-                            // Vaga foi preenchida por outro servo enquanto o usuário escolhia
-                            console.log(`[RACE] Vaga da missa ${selectedMass.ID_MISSA} esgotada em tempo real para ${phone}.`);
-                            await msg.reply(
-                                `⚠️ Que pena! A vaga na missa de *${selectedMass.DATA} às ${selectedMass.HORA}* acabou de ser preenchida por outro servo.` +
-                                `\n\nAqui está a lista atualizada para uma nova escolha:`
-                            );
-                            // Reexibe lista atualizada
-                            const listaAtualizada = await internalFunctions.fluxoServir(
-                                msg, contact,
-                                { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
-                                state.monthOffset || 0
-                            );
-                            await msg.reply(listaAtualizada);
-                            return;
-                        }
-
-                        // Verificar duplicidade para este dizimista
-                        const checkDup = await conn.execute(`
-                        SELECT 1 FROM MISSA_SERVOS WHERE ID_MISSA = :m AND ID_DIZIMISTA = :d
-                    `, { m: selectedMass.ID_MISSA, d: state.idDizimista });
-
-                        if (checkDup.rows.length > 0) {
-                            await msg.reply("Você já está inscrito para servir nesta missa! Escolha outra opção ou digite *0* para voltar.");
-                            return;
-                        }
-
-                        // --- INSERT ---
-                        await conn.execute(`
-                        INSERT INTO MISSA_SERVOS (ID_MISSA, ID_DIZIMISTA, ID_PASTORAL) 
-                        VALUES (:m, :d, :p)
-                    `, {
-                            m: selectedMass.ID_MISSA,
-                            d: state.idDizimista,
-                            p: selectedMass.ID_PASTORAL
-                        });
-
-                        await msg.reply(`✅ Confirmado! Você foi escalado para servir na missa de *${selectedMass.DATA} às ${selectedMass.HORA}*. Deus abençoe! 🙏`);
-
-                        // Reexibe lista atualizada para possível nova inscrição
-                        await new Promise(r => setTimeout(r, 800));
-                        const listaAtualizada = await internalFunctions.fluxoServir(
-                            msg, contact,
-                            { id: state.idDizimista, nome: state.nomeDizimista, apelido: state.apelidoDizimista },
-                            state.monthOffset || 0
-                        );
-                        await msg.reply(listaAtualizada);
-
-                    } catch (err) {
-                        console.error('Erro ao salvar missa_servos:', err);
-                        await msg.reply("Houve um erro ao confirmar sua escala. Tente novamente.");
-                        delete userStates[phone];
-                    } finally {
-                        if (conn) await conn.close();
-                    }
-                } else {
-                    await msg.reply("Opção inválida. Por favor, escolha o número correspondente à missa na lista acima.");
                 }
             } else if (state.flowId === 'listar_missas_selecao') {
                 console.log(`[STATE] Usuário ${phone} selecionando missa para detalhes: ${text}`);

@@ -23,10 +23,11 @@ async function seed() {
         const mainMenu = {
             id: 'main_menu',
             triggers: 'menu, ajuda, oi',
-            message: "*Menu da Paróquia* 🙏\n\nEscolha uma opção:\n1️⃣ *Servir*: Candidatar-se para trabalhar em uma missa.\n2️⃣ *Missas*: Ver horários das missas do mês.\n\n_Digite o número da opção desejada._",
+            message: "*Menu da Paróquia* 🙏\n\nEscolha uma opção:\n1️⃣ *Servir*: Novo aplicativo de escala de servos.\n2️⃣ *Missas*: Ver horários das missas do mês.\n3️⃣ *Cancelar Servir*: Cancelar um agendamento de servir.\n\n_Digite o número da opção desejada._",
             options: JSON.stringify({
-                "1": { "type": "function", "value": "fluxoServir" },
-                "2": { "type": "function", "value": "listarMissas" }
+                "1": { "type": "reply", "value": "A partir de agora, a gestão de Escalas é realizada somente pelo novo aplicativo. Acesse o link abaixo para gerenciar suas escalas:\n\nhttps://imaculadocoracaomaria.org.br/escala.html" },
+                "2": { "type": "function", "value": "listarMissas" },
+                "3": { "type": "function", "value": "fluxoCancelarServir" }
             })
         };
 
