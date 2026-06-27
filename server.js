@@ -546,7 +546,7 @@ const internalFunctions = {
         let isLid = false;
         const originalDigits = phone.replace(/\D/g, '');
 
-        if (originalDigits.length >= 14) {
+        if (originalDigits.length >= 12 && !/^55\d{10,11}$/.test(originalDigits)) {
             isLid = true;
             cleanPhone = originalDigits; // Usa o numero completo sem limpar prefixos para LIDs
         } else {
@@ -974,7 +974,7 @@ async function finalizarCadastro(msg, phone) {
 
         // --- 1. Grava DIZIMISTAS ---
         const rawPhoneStr = phone.replace(/\D/g, '');
-        const isLid = rawPhoneStr.length >= 14;
+        const isLid = rawPhoneStr.length >= 12 && !/^55\d{10,11}$/.test(rawPhoneStr);
         
         let telNacional = null;
         let whatsappId = null;
@@ -1855,7 +1855,7 @@ client.on('message_create', async msg => {
                     if (resCPF.rows.length > 0) {
                         const diz = resCPF.rows[0];
                         const telAtual = diz.TELEFONE ? diz.TELEFONE.replace(/\D/g, '') : '';
-                        const isLid = phone.replace(/\D/g, '').length >= 14;
+                        const isLid = phone.replace(/\D/g, '').length >= 12 && !/^55\d{10,11}$/.test(phone.replace(/\D/g, ''));
                         userStates[phone] = {
                             flowId: 'cadastro_confirmar_telefone',
                             idDizimista: diz.ID_DIZIMISTA,
@@ -1923,7 +1923,7 @@ client.on('message_create', async msg => {
                 try {
                     const userData = await internalFunctions.buscarDizimistaPorTelefone(telDigitado);
                     if (userData) {
-                        const isLid = phone.replace(/\D/g, '').length >= 14;
+                        const isLid = phone.replace(/\D/g, '').length >= 12 && !/^55\d{10,11}$/.test(phone.replace(/\D/g, ''));
                         userStates[phone] = {
                             flowId: 'cadastro_confirmar_telefone',
                             idDizimista: userData.id,
@@ -1970,7 +1970,7 @@ client.on('message_create', async msg => {
                     try {
                         conn = await getOracleConnection();
                         const rawPhoneStr = phone.replace(/\D/g, '');
-                        const isLidCheck = state.isLid || rawPhoneStr.length >= 14;
+                        const isLidCheck = state.isLid || (rawPhoneStr.length >= 12 && !/^55\d{10,11}$/.test(rawPhoneStr));
                         const mainFlow = chatFlows['main_menu'];
                         const hour = new Date().getHours();
                         let saudacao = 'Boa noite';
