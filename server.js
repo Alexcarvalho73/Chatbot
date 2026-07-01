@@ -274,22 +274,43 @@ async function getDizimistasCache() {
     }
 }
 
-async function getOracleConnection() {
+let oraclePoolCreated = false;
+
+async function createOraclePool() {
+    if (oraclePoolCreated) return;
     try {
         // Define TNS_ADMIN para localizar tnsnames.ora e sqlnet.ora na Wallet
         process.env.TNS_ADMIN = oracleConfig.walletLocation;
 
-        const conn = await oracledb.getConnection({
+        await oracledb.createPool({
             user: oracleConfig.user,
             password: oracleConfig.password,
             connectString: oracleConfig.connectString,
             walletLocation: oracleConfig.walletLocation,
             walletPassword: oracleConfig.walletPassword,
-            configDir: oracleConfig.walletLocation
+            configDir: oracleConfig.walletLocation,
+            poolMin: 2,
+            poolMax: 10,
+            poolIncrement: 1
         });
+        
+        oraclePoolCreated = true;
+        console.log('[DB] Pool de conexões Oracle criado com sucesso!');
+    } catch (err) {
+        console.error('[DB] ERRO AO CRIAR POOL ORACLE:', err.message);
+        throw err;
+    }
+}
 
-        console.log('[DB] Conectado ao Oracle com sucesso!');
-
+async function getOracleConnection() {
+    try {
+        if (!oraclePoolCreated) {
+            await createOraclePool();
+        }
+        
+        // Pega uma conexão do Pool padrão
+        const conn = await oracledb.getConnection();
+        
         await conn.execute("ALTER SESSION SET NLS_COMP = LINGUISTIC");
         await conn.execute("ALTER SESSION SET NLS_SORT = BINARY_AI");
 
@@ -304,6 +325,7 @@ async function getOracleConnection() {
 async function initOracle() {
     let conn;
     try {
+        await createOraclePool();
         conn = await getOracleConnection();
         // Verifica se a tabela flows existe
         const checkTable = await conn.execute(`

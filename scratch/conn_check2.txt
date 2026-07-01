@@ -1,0 +1,1264 @@
+﻿
+> server.js:257:        conn = await getOracleConnection();
+  server.js:258:        const res = await conn.execute(`SELECT TELEFONE, APELIDO, NOME FROM DIZIMISTAS WHERE TELEFONE 
+IS NOT NULL AND STATUS = 1`);
+  server.js:259:        const map = {};
+  server.js:260:        for (const r of res.rows) {
+  server.js:261:            if (!r.TELEFONE) continue;
+  server.js:262:            let cleanPhone = r.TELEFONE.replace(/\D/g, '');
+  server.js:263:            if (cleanPhone.length >= 10 && cleanPhone.length <= 11) cleanPhone = '55' + cleanPhone;
+  server.js:264:            map[cleanPhone] = r.APELIDO || r.NOME;
+  server.js:265:        }
+  server.js:266:        dizimistasContactCache = map;
+  server.js:267:        lastDizimistasCacheTime = Date.now();
+  server.js:268:        return map;
+  server.js:269:    } catch (err) {
+  server.js:270:        console.error("Erro atualizar cache de contatos:", err);
+  server.js:271:        return dizimistasContactCache || {};
+  server.js:272:    } finally {
+  server.js:273:        if (conn) await conn.close();
+  server.js:274:    }
+  server.js:275:}
+  server.js:276:
+  server.js:277:async function getOracleConnection() {
+  server.js:278:    try {
+  server.js:279:        // Define TNS_ADMIN para localizar tnsnames.ora e sqlnet.ora na Wallet
+  server.js:280:        process.env.TNS_ADMIN = oracleConfig.walletLocation;
+  server.js:281:
+  server.js:282:        const conn = await oracledb.getConnection({
+  server.js:283:            user: oracleConfig.user,
+  server.js:284:            password: oracleConfig.password,
+  server.js:285:            connectString: oracleConfig.connectString,
+  server.js:286:            walletLocation: oracleConfig.walletLocation,
+  server.js:287:            walletPassword: oracleConfig.walletPassword,
+  server.js:288:            configDir: oracleConfig.walletLocation
+  server.js:289:        });
+  server.js:290:
+  server.js:291:        console.log('[DB] Conectado ao Oracle com sucesso!');
+  server.js:292:
+  server.js:293:        await conn.execute("ALTER SESSION SET NLS_COMP = LINGUISTIC");
+  server.js:294:        await conn.execute("ALTER SESSION SET NLS_SORT = BINARY_AI");
+  server.js:295:
+  server.js:296:        return conn;
+  server.js:297:    } catch (err) {
+  server.js:298:        console.error('[DB] ERRO NA CONEXÃO ORACLE:', err.message);
+  server.js:299:        throw err;
+  server.js:300:    }
+  server.js:301:}
+  server.js:302:
+  server.js:303:// Criação da tabela de fluxos no Oracle se não existir
+  server.js:304:async function initOracle() {
+  server.js:305:    let conn;
+  server.js:306:    try {
+> server.js:307:        conn = await getOracleConnection();
+  server.js:308:        // Verifica se a tabela flows existe
+  server.js:309:        const checkTable = await conn.execute(`
+  server.js:310:            SELECT table_name FROM user_tables WHERE table_name = 'FLOWS'
+  server.js:311:        `);
+  server.js:312:
+  server.js:313:        if (checkTable.rows.length === 0) {
+  server.js:314:            console.log('Table FLOWS not found. Creating...');
+  server.js:315:            await conn.execute(`
+  server.js:316:                CREATE TABLE flows (
+  server.js:317:                    id VARCHAR2(100) PRIMARY KEY,
+  server.js:318:                    triggers VARCHAR2(1000),
+  server.js:319:                    message CLOB,
+  server.js:320:                    options CLOB
+  server.js:321:                )
+  server.js:322:            `);
+  server.js:323:            console.log('Table FLOWS created successfully.');
+  server.js:324:        }
+  server.js:325:
+  server.js:326:        console.log('Seeding/updating default main_menu flow...');
+  server.js:327:        const mainMenuData = {
+  server.js:328:            id: 'main_menu',
+  server.js:329:            triggers: 'menu, ajuda, oi',
+  server.js:330:            message: "*Menu da Paróquia* 🙏\n\nEscolha uma opção:\n1️⃣ *Servir*: Novo aplicativo de 
+escala de servos.\n2️⃣ *Missas*: Ver horários das missas do mês.\n3️⃣ *Cancelar Servir*: Cancelar um agendamento de 
+servir.\n\n_Digite o número da opção desejada._",
+  server.js:331:            options: JSON.stringify({
+  server.js:332:                "1": { "type": "reply", "value": "A partir de agora, a gestão de Escalas é realizada 
+somente pelo novo aplicativo. Acesse o link abaixo para gerenciar suas 
+escalas:\n\nhttps://imaculadocoracaomaria.org.br/escala.html" },
+  server.js:333:                "2": { "type": "function", "value": "listarMissas" },
+  server.js:334:                "3": { "type": "function", "value": "fluxoCancelarServir" }
+  server.js:335:            })
+  server.js:336:        };
+  server.js:337:
+  server.js:338:        const mergeSql = `
+  server.js:339:            MERGE INTO flows f
+  server.js:340:            USING (SELECT :id as id FROM dual) src
+  server.js:341:            ON (f.id = src.id)
+  server.js:342:            WHEN MATCHED THEN
+  server.js:343:                UPDATE SET triggers = :triggers, message = :message, options = :options
+  server.js:344:            WHEN NOT MATCHED THEN
+  server.js:345:                INSERT (id, triggers, message, options) VALUES (:id, :triggers, :message, :options)
+  server.js:346:        `;
+  server.js:347:
+  server.js:348:        await conn.execute(mergeSql, mainMenuData);
+  server.js:349:        console.log('Default main_menu flow seeded/updated in database.');
+  server.js:350:
+  server.js:351:        // Verifica se a tabela MENSAGENS existe
+  server.js:352:        const checkTableMensagens = await conn.execute(`
+  server.js:353:            SELECT table_name FROM user_tables WHERE table_name = 'MENSAGENS'
+  server.js:354:        `);
+  server.js:355:
+  server.js:356:        if (checkTableMensagens.rows.length === 0) {
+  server.js:357:            console.log('Table MENSAGENS not found. Creating...');
+> server.js:425:        conn = await getOracleConnection();
+  server.js:426:        const result = await conn.execute("SELECT id, triggers, message, options FROM flows");
+  server.js:427:        const newFlows = {};
+  server.js:428:        result.rows.forEach(row => {
+  server.js:429:            newFlows[row.ID] = {
+  server.js:430:                trigger: row.TRIGGERS ? row.TRIGGERS.split(',').map(t => t.trim().toLowerCase()) : 
+null,
+  server.js:431:                message: row.MESSAGE,
+  server.js:432:                options: JSON.parse(row.OPTIONS)
+  server.js:433:            };
+  server.js:434:        });
+  server.js:435:        chatFlows = newFlows;
+  server.js:436:        console.log('Flows loaded from Oracle Database.');
+  server.js:437:    } catch (err) {
+  server.js:438:        console.error('Error loading flows from Oracle:', err);
+  server.js:439:    } finally {
+  server.js:440:        if (conn) await conn.close();
+  server.js:441:    }
+  server.js:442:}
+  server.js:443:
+  server.js:444:let lastHealthCheckHour = -1;
+  server.js:445:
+  server.js:446:async function performHealthCheck(hour) {
+  server.js:447:    let conn;
+  server.js:448:    try {
+> server.js:449:        conn = await getOracleConnection();
+  server.js:450:        const result = await conn.execute(`
+  server.js:451:            SELECT ID_MENSAGENS, DATAHORA FROM MENSAGENS WHERE STATUS = 0
+  server.js:452:        `);
+  server.js:453:
+  server.js:454:        if (result.rows.length === 0) {
+  server.js:455:            console.log(`[HEALTH-CHECK] Nenhuma mensagem travada encontrada na checagem das 
+${hour}:00.`);
+  server.js:456:            return;
+  server.js:457:        }
+  server.js:458:
+  server.js:459:        const now = new Date();
+  server.js:460:        const thresholdMs = 20 * 60 * 1000; // 20 minutos
+  server.js:461:        let stuckMessages = [];
+  server.js:462:
+  server.js:463:        for (const row of result.rows) {
+  server.js:464:            if (row.DATAHORA) {
+  server.js:465:                const msgTime = new Date(row.DATAHORA);
+  server.js:466:                if (now - msgTime > thresholdMs) {
+  server.js:467:                    stuckMessages.push(row.ID_MENSAGENS);
+  server.js:468:                }
+  server.js:469:            } else {
+  server.js:470:                stuckMessages.push(row.ID_MENSAGENS);
+  server.js:471:            }
+  server.js:472:        }
+  server.js:473:
+  server.js:474:        if (stuckMessages.length > 0) {
+  server.js:475:            console.log(`[HEALTH-CHECK] Alerta! Encontradas ${stuckMessages.length} mensagens travadas 
+no banco.`);
+  server.js:476:            await sendTelegramAlert(
+  server.js:477:                `🚨 *Chatbot Paróquia - Alerta de Saúde (${hour}:00)* 🚨\n\n` +
+  server.js:478:                `Foi detectado que existem *${stuckMessages.length} mensagens travadas* no banco de 
+dados com STATUS = 0 há mais de 20 minutos!\n\n` +
+  server.js:479:                `IDs das mensagens: ${stuckMessages.join(', ')}\n\n` +
+  server.js:480:                `O chatbot pode estar travado, desconectado ou o navegador Puppeteer pode ter fechado.`
+  server.js:481:            );
+  server.js:482:        } else {
+  server.js:483:            console.log(`[HEALTH-CHECK] Mensagens pendentes encontradas, mas nenhuma está há mais de 
+20 minutos.`);
+  server.js:484:        }
+  server.js:485:    } catch (err) {
+  server.js:486:        console.error('[HEALTH-CHECK] Erro ao executar checagem de saúde:', err);
+  server.js:487:        await sendTelegramAlert(`❌ *Chatbot Paróquia:* Erro ao rodar checagem de saúde das ${hour}:00: 
+${err.message}`);
+  server.js:488:    } finally {
+  server.js:489:        if (conn) await conn.close();
+  server.js:490:    }
+  server.js:491:}
+  server.js:492:
+  server.js:493:function startHealthCheckScheduler() {
+  server.js:494:    console.log('[HEALTH-CHECK] Inicializando monitor de saúde (07:00, 12:00, 18:00)...');
+  server.js:495:    
+  server.js:496:    // Roda a checagem a cada 1 minuto
+  server.js:497:    setInterval(async () => {
+  server.js:498:        const now = new Date();
+  server.js:499:        const hrs = now.getHours();
+> server.js:563:            conn = await getOracleConnection();
+  server.js:564:            const query = `
+  server.js:565:                SELECT d.ID_DIZIMISTA, d.NOME, d.APELIDO, u.ID_PERFIL,
+  server.js:566:                       (SELECT 1 FROM DIZIMISTA_PASTORAL dp 
+  server.js:567:                        JOIN PASTORAIS p ON dp.ID_PASTORAL = p.ID_PASTORAL
+  server.js:568:                        WHERE dp.ID_DIZIMISTA = d.ID_DIZIMISTA 
+  server.js:569:                        AND p.NOME = 'Padres' AND ROWNUM = 1) as IS_PADRE
+  server.js:570:                FROM DIZIMISTAS d
+  server.js:571:                LEFT JOIN USUARIOS u ON d.ID_DIZIMISTA = u.ID_DIZIMISTA
+  server.js:572:                WHERE (REGEXP_REPLACE(d.TELEFONE, '[^0-9]', '') LIKE :phone OR d.WHATSAPP_ID = :lid)
+  server.js:573:                AND d.STATUS = 1
+  server.js:574:            `;
+  server.js:575:            const params = { 
+  server.js:576:                phone: isLid ? 'THIS_WILL_NEVER_MATCH' : '%' + cleanPhone, 
+  server.js:577:                lid: isLid ? cleanPhone : 'NONE'
+  server.js:578:            };
+  server.js:579:
+  server.js:580:            const resDiz = await conn.execute(query, params);
+  server.js:581:
+  server.js:582:            if (resDiz.rows.length > 0) {
+  server.js:583:                const r = resDiz.rows[0];
+  server.js:584:                console.log(`[ID] Dizimista localizado: ${r.NOME} (ID: ${r.ID_DIZIMISTA}, Perfil: 
+${r.ID_PERFIL}, IsPadre: ${r.IS_PADRE})`);
+  server.js:585:                return {
+  server.js:586:                    id: r.ID_DIZIMISTA,
+  server.js:587:                    nome: r.NOME,
+  server.js:588:                    apelido: r.APELIDO || r.NOME,
+  server.js:589:                    idPerfil: r.ID_PERFIL,
+  server.js:590:                    isPadre: r.IS_PADRE === 1
+  server.js:591:                };
+  server.js:592:            }
+  server.js:593:            console.log(`[ID] Nenhum dizimista encontrado para o telefone: ${cleanPhone}`);
+  server.js:594:            return null;
+  server.js:595:        } catch (err) {
+  server.js:596:            console.error('Erro buscarDizimistaPorTelefone:', err);
+  server.js:597:            return null;
+  server.js:598:        } finally {
+  server.js:599:            if (conn) await conn.close();
+  server.js:600:        }
+  server.js:601:    },
+  server.js:602:    listarMissas: async (msg, contact, userData) => {
+  server.js:603:        const phone = contact.number;
+  server.js:604:        let conn;
+  server.js:605:        try {
+> server.js:606:            conn = await getOracleConnection();
+  server.js:607:            // Missas da semana a partir de hoje (próximos 7 dias)
+  server.js:608:            const result = await conn.execute(`
+  server.js:609:                SELECT ID_MISSA, TO_CHAR(TO_DATE(DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, HORA, 
+COMUNIDADE, CELEBRANTE 
+  server.js:610:                FROM MISSAS 
+  server.js:611:                WHERE TO_DATE(DATA_MISSA, 'YYYY-MM-DD') >= TRUNC(SYSDATE) 
+  server.js:612:                AND TO_DATE(DATA_MISSA, 'YYYY-MM-DD') < TRUNC(SYSDATE) + 7
+  server.js:613:                AND STATUS = 1
+  server.js:614:                ORDER BY DATA_MISSA, HORA
+  server.js:615:            `);
+  server.js:616:
+  server.js:617:            if (result.rows.length === 0) return "Não há missas agendadas para os próximos 7 dias.";
+  server.js:618:
+  server.js:619:            // Guardar no estado para a seleção
+  server.js:620:            userStates[phone] = {
+  server.js:621:                ...userStates[phone],
+  server.js:622:                flowId: 'listar_missas_selecao',
+  server.js:623:                availableMasses: result.rows
+  server.js:624:            };
+  server.js:625:
+  server.js:626:            let response = "📅 *MISSAS DA SEMANA*\n\n";
+  server.js:627:            result.rows.forEach((r, idx) => {
+  server.js:628:                const celebranteStr = r.CELEBRANTE ? ` - ${r.CELEBRANTE}` : "";
+  server.js:629:                response += `${idx + 1} - ${r.DATA} - ${r.HORA}${celebranteStr}\n`;
+  server.js:630:            });
+  server.js:631:
+  server.js:632:            response += "\nDigite *0* para menu principal\n";
+  server.js:633:            response += "Digite o *número* da missa para ver detalhes (caso tenha permissão)";
+  server.js:634:
+  server.js:635:            if (userData && userData.isPadre) {
+  server.js:636:                response += "\n\n✨ *Opção de Padre*:\nDigite a letra *E* seguido do número da missa 
+para editar o celebrante (ex: E1)";
+  server.js:637:            }
+  server.js:638:
+  server.js:639:            return response;
+  server.js:640:        } catch (err) {
+  server.js:641:            console.error('Erro listarMissas:', err);
+  server.js:642:            return "Erro ao buscar missas. Tente novamente mais tarde.";
+  server.js:643:        } finally {
+  server.js:644:            if (conn) await conn.close();
+  server.js:645:        }
+  server.js:646:    },
+  server.js:647:    fluxoCancelarServir: async (msg, contact, userData) => {
+  server.js:648:        const phone = contact.number;
+  server.js:649:        const idDizimista = userData.id;
+  server.js:650:        const nomeDizimista = userData.apelido || userData.nome;
+  server.js:651:
+  server.js:652:        let conn;
+  server.js:653:        try {
+> server.js:654:            conn = await getOracleConnection();
+  server.js:655:
+  server.js:656:            // Buscar Missas que o usuário está inscrito (sem restrição de mês, apenas de hoje em 
+diante)
+  server.js:657:            const resMissas = await conn.execute(`
+  server.js:658:                SELECT m.ID_MISSA, TO_CHAR(TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM') as DATA, 
+m.HORA, m.COMUNIDADE, 
+  server.js:659:                       ms.ID_PASTORAL, p.NOME as PASTORAL_NOME
+  server.js:660:                FROM MISSA_SERVOS ms
+  server.js:661:                JOIN MISSAS m ON ms.ID_MISSA = m.ID_MISSA
+  server.js:662:                JOIN PASTORAIS p ON ms.ID_PASTORAL = p.ID_PASTORAL
+  server.js:663:                WHERE ms.ID_DIZIMISTA = :idDizimista
+  server.js:664:                AND TO_DATE(m.DATA_MISSA, 'YYYY-MM-DD') >= TRUNC(SYSDATE)
+  server.js:665:                ORDER BY m.DATA_MISSA, m.HORA
+  server.js:666:            `, { idDizimista });
+  server.js:667:
+  server.js:668:            if (resMissas.rows.length === 0) {
+  server.js:669:                return `Olá ${nomeDizimista}! Não encontrei nenhuma missa em que você esteja 
+escalado(a) neste período para cancelar.`;
+  server.js:670:            }
+  server.js:671:
+  server.js:672:            // Guardar no estado para a seleção de cancelamento
+  server.js:673:            userStates[phone] = {
+  server.js:674:                flowId: 'cancelar_selecao',
+  server.js:675:                idDizimista,
+  server.js:676:                nomeDizimista: userData.nome,
+  server.js:677:                apelidoDizimista: userData.apelido,
+  server.js:678:                availableMasses: resMissas.rows
+  server.js:679:            };
+  server.js:680:
+  server.js:681:            let response = `Olá *${nomeDizimista}*! 👋\nVocê está escalado(a) nas seguintes 
+missas.\nEscolha o número da missa que deseja *CANCELAR* sua participação:\n\n`;
+  server.js:682:            resMissas.rows.forEach((r, idx) => {
+  server.js:683:                response += `*${idx + 1}* - ${r.DATA} às ${r.HORA}\n📍 ${r.COMUNIDADE}\n🛠 Pastoral: 
+*${r.PASTORAL_NOME}*\n\n`;
+  server.js:684:            });
+  server.js:685:            response += "*0* - Voltar ao Menu Anterior\n\nResponda com o *NÚMERO* da missa que deseja 
+desmarcar.";
+  server.js:686:            return response;
+  server.js:687:
+  server.js:688:        } catch (err) {
+  server.js:689:            console.error('Erro fluxoCancelarServir:', err);
+  server.js:690:            return "Erro ao processar sua solicitação de consulta.";
+  server.js:691:        } finally {
+  server.js:692:            if (conn) await conn.close();
+  server.js:693:        }
+  server.js:694:    }
+  server.js:695:};
+  server.js:696:
+  server.js:697:const https = require('https');
+  server.js:698:
+  server.js:699:async function parseReceiptWithGemini(base64Data, mimeType, chavePix) {
+  server.js:700:    if (!systemConfig.geminiApiKey) {
+  server.js:701:        throw new Error("Chave da API do Gemini não configurada no painel de configurações 
+(config.json).");
+  server.js:702:    }
+  server.js:703:
+  server.js:704:    const prompt = `Analise este comprovante de pagamento bancário ou PIX.
+> server.js:822:        conn = await getOracleConnection();
+  server.js:823:        const res = await conn.execute(`
+  server.js:824:            SELECT COMPETENCIA, SUM(VALOR) as TOTAL
+  server.js:825:            FROM RECEBIMENTOS
+  server.js:826:            WHERE ID_DIZIMISTA = :id AND STATUS IN (1, 2)
+  server.js:827:            GROUP BY COMPETENCIA
+  server.js:828:        `, { id: idDizimista });
+  server.js:829:        res.rows.forEach(r => { pagosMap[r.COMPETENCIA] = r.TOTAL; });
+  server.js:830:    } catch(dbErr) {
+  server.js:831:        console.error('Erro ao buscar historico:', dbErr);
+  server.js:832:    } finally {
+  server.js:833:        if (conn) await conn.close();
+  server.js:834:    }
+  server.js:835:
+  server.js:836:    let resposta = `✅ *Comprovante Identificado!*\n`;
+  server.js:837:    resposta += `👤 *Dizimista:* ${nomeDizimista}\n`;
+  server.js:838:    resposta += `*Valor:* R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}\n`;
+  server.js:839:    const [a, m, d] = dadosRecibo.date.split('-');
+  server.js:840:    resposta += `*Data:* ${d}/${m}/${a}\n`;
+  server.js:841:    resposta += `*Autenticação:* ${dadosRecibo.auth_code || 'Não encontrada na imagem'}\n`;
+  server.js:842:    if (dadosRecibo.raw_data) {
+  server.js:843:        resposta += `\n📄 *Dados Extraídos do Recibo:*\n_${dadosRecibo.raw_data.trim()}_\n\n`;
+  server.js:844:    } else {
+  server.js:845:        resposta += `\n`;
+  server.js:846:    }
+  server.js:847:    resposta += `📊 *Relação de Competências:*\n`;
+  server.js:848:    
+  server.js:849:    let opcoesDisponiveis = [];
+  server.js:850:    let countOpcoes = 1;
+  server.js:851:    meses_ref.forEach((comp) => {
+  server.js:852:        const valor = pagosMap[comp] || 0;
+  server.js:853:        if (valor > 0) {
+  server.js:854:            resposta += `✅ ${comp}: R$ ${valor.toFixed(2).replace('.', ',')} (Já lançado)\n`;
+  server.js:855:        } else {
+  server.js:856:            resposta += `*${countOpcoes}* - ${comp}: pendente\n`;
+  server.js:857:            opcoesDisponiveis.push({ num: countOpcoes, comp: comp });
+  server.js:858:            countOpcoes++;
+  server.js:859:        }
+  server.js:860:    });
+  server.js:861:    
+  server.js:862:    resposta += `\nPara confirmar o lançamento de R$ ${dadosRecibo.value.toFixed(2).replace('.',',')}, 
+digite o *NÚMERO* correspondente ao mês listado acima (somente os pendentes). Ou digite *CANCELAR*.`;
+  server.js:863:
+  server.js:864:    userStates[phone] = {
+  server.js:865:        flowId: 'processar_competencia_recibo',
+  server.js:866:        idDizimista: idDizimista,
+  server.js:867:        nomeDizimista: nomeDizimista,
+  server.js:868:        reciboData: {
+  server.js:869:            valor: dadosRecibo.value,
+  server.js:870:            dataPagamento: `${d}/${m}/${a}`,
+  server.js:871:            dataDB: dadosRecibo.date, // Formato YYYY-MM-DD
+  server.js:872:            authCode: dadosRecibo.auth_code || null,
+> server.js:973:        conn = await getOracleConnection();
+  server.js:974:
+  server.js:975:        // --- 1. Grava DIZIMISTAS ---
+  server.js:976:        const rawPhoneStr = phone.replace(/\D/g, '');
+  server.js:977:        const isLid = rawPhoneStr.length >= 12 && !/^55\d{10,11}$/.test(rawPhoneStr);
+  server.js:978:        
+  server.js:979:        let telNacional = null;
+  server.js:980:        let whatsappId = null;
+  server.js:981:        
+  server.js:982:        if (isLid) {
+  server.js:983:            whatsappId = rawPhoneStr;
+  server.js:984:            if (dados.telefoneDigitado) {
+  server.js:985:                telNacional = dados.telefoneDigitado.replace(/^55/, '').replace(/\D/g, '');
+  server.js:986:            }
+  server.js:987:        } else {
+  server.js:988:            telNacional = phone.replace(/^55/, '').replace(/\D/g, '');
+  server.js:989:        }
+  server.js:990:
+  server.js:991:        const fonetica = await generatePhonetics(dados.nome, conn);
+  server.js:992:        console.log(`[CADASTRO] Gerando registro para ${dados.nome}. Fonética: "${fonetica}", CPF: 
+${dados.cpf}, Telefone: ${telNacional}, WhatsApp ID: ${whatsappId}`);
+  server.js:993:
+  server.js:994:        await conn.execute(`
+  server.js:995:            INSERT INTO DIZIMISTAS (NOME, FONETICA, CPF, TELEFONE, WHATSAPP_ID, EMAIL, CEP, ENDERECO, 
+DATA_NASCIMENTO, STATUS)
+  server.js:996:            VALUES (:nome, :fonetica, :cpf, :telefone, :whatsapp_id, :email, :cep, :endereco,
+  server.js:997:                    TO_DATE(:nascimento, 'DD/MM/YYYY'), 1)
+  server.js:998:        `, {
+  server.js:999:            nome: dados.nome,
+  server.js:1000:            fonetica: fonetica,
+  server.js:1001:            cpf: formatarCPF(dados.cpf),
+  server.js:1002:            telefone: telNacional,
+  server.js:1003:            whatsapp_id: whatsappId,
+  server.js:1004:            email: dados.email,
+  server.js:1005:            cep: dados.cep.replace(/\D/g, ''),
+  server.js:1006:            endereco: dados.endereco,
+  server.js:1007:            nascimento: dados.nascimento
+  server.js:1008:        }, { autoCommit: true });
+  server.js:1009:
+  server.js:1010:        // Recupera o ID gerado (usando REGEXP_REPLACE para ser robusto com a formatação)
+  server.js:1011:        const resId = await conn.execute(`
+  server.js:1012:            SELECT ID_DIZIMISTA FROM DIZIMISTAS 
+  server.js:1013:            WHERE REGEXP_REPLACE(CPF, '[^0-9]', '') = :cpf
+  server.js:1014:            AND STATUS = 1
+  server.js:1015:        `, { cpf: dados.cpf.replace(/\D/g, '') });
+  server.js:1016:
+  server.js:1017:        if (resId.rows.length === 0) {
+  server.js:1018:            console.error(`[CADASTRO] Erro crítico: Registro inserido mas não encontrado para o CPF 
+${dados.cpf}`);
+  server.js:1019:            throw new Error("Falha ao recuperar ID do dizimista cadastrado.");
+  server.js:1020:        }
+  server.js:1021:        const idDizimista = resId.rows[0].ID_DIZIMISTA;
+  server.js:1022:
+  server.js:1023:        // Invalida cache de contatos para incluir o novo dizimista
+> server.js:1075:        conn = await getOracleConnection();
+  server.js:1076:        const result = await conn.execute("SELECT id, triggers, message, options FROM flows");
+  server.js:1077:        res.json(result.rows.map(r => ({
+  server.js:1078:            id: r.ID,
+  server.js:1079:            triggers: r.TRIGGERS,
+  server.js:1080:            message: r.MESSAGE,
+  server.js:1081:            options: JSON.parse(r.OPTIONS)
+  server.js:1082:        })));
+  server.js:1083:    } catch (err) {
+  server.js:1084:        res.status(500).json({ error: err.message });
+  server.js:1085:    } finally {
+  server.js:1086:        if (conn) await conn.close();
+  server.js:1087:    }
+  server.js:1088:});
+  server.js:1089:
+  server.js:1090:app.post('/api/flows', async (req, res) => {
+  server.js:1091:    const { id, triggers, message, options } = req.body;
+  server.js:1092:    const optionsStr = JSON.stringify(options);
+  server.js:1093:    let conn;
+  server.js:1094:    try {
+> server.js:1095:        conn = await getOracleConnection();
+  server.js:1096:        // Em Oracle, usamos MERGE ou verificamos se existe para o INSERT/UPDATE
+  server.js:1097:        const mergeSql = `
+  server.js:1098:            MERGE INTO flows f
+  server.js:1099:            USING (SELECT :id as id FROM dual) src
+  server.js:1100:            ON (f.id = src.id)
+  server.js:1101:            WHEN MATCHED THEN
+  server.js:1102:                UPDATE SET triggers = :triggers, message = :message, options = :options
+  server.js:1103:            WHEN NOT MATCHED THEN
+  server.js:1104:                INSERT (id, triggers, message, options) VALUES (:id, :triggers, :message, :options)
+  server.js:1105:        `;
+  server.js:1106:        await conn.execute(mergeSql, { id, triggers, message, options: optionsStr });
+  server.js:1107:        await loadFlowsFromDB(); // Recarrega em memória
+  server.js:1108:        res.json({ success: true });
+  server.js:1109:    } catch (err) {
+  server.js:1110:        res.status(500).json({ error: err.message });
+  server.js:1111:    } finally {
+  server.js:1112:        if (conn) await conn.close();
+  server.js:1113:    }
+  server.js:1114:});
+  server.js:1115:
+  server.js:1116:app.delete('/api/flows/:id', async (req, res) => {
+  server.js:1117:    let conn;
+  server.js:1118:    try {
+> server.js:1119:        conn = await getOracleConnection();
+  server.js:1120:        await conn.execute("DELETE FROM flows WHERE id = :id", { id: req.params.id });
+  server.js:1121:        await loadFlowsFromDB();
+  server.js:1122:        res.json({ success: true });
+  server.js:1123:    } catch (err) {
+  server.js:1124:        res.status(500).json({ error: err.message });
+  server.js:1125:    } finally {
+  server.js:1126:        if (conn) await conn.close();
+  server.js:1127:    }
+  server.js:1128:});
+  server.js:1129:app.get('/api/test-db', async (req, res) => {
+  server.js:1130:    let conn;
+  server.js:1131:    try {
+> server.js:1132:        conn = await getOracleConnection();
+  server.js:1133:        const testId = 'test_' + Date.now();
+  server.js:1134:        await conn.execute(
+  server.js:1135:            "INSERT INTO flows (id, triggers, message, options) VALUES (:id, :triggers, :message, 
+:options)",
+  server.js:1136:            {
+  server.js:1137:                id: testId,
+  server.js:1138:                triggers: 'test',
+  server.js:1139:                message: 'Conexão Oracle funcionando!',
+  server.js:1140:                options: JSON.stringify({ 'test': { type: 'reply', value: 'OK' } })
+  server.js:1141:            }
+  server.js:1142:        );
+  server.js:1143:        res.json({ success: true, message: 'Registro gravado com sucesso!', id: testId });
+  server.js:1144:    } catch (err) {
+  server.js:1145:        res.status(500).json({ error: err.message });
+  server.js:1146:    } finally {
+  server.js:1147:        if (conn) await conn.close();
+  server.js:1148:    }
+  server.js:1149:});
+  server.js:1150:
+  server.js:1151:app.get('/api/db-status', (req, res) => {
+  server.js:1152:    res.json({ connected: dbStatus });
+  server.js:1153:});
+  server.js:1154:
+  server.js:1155:app.get('/api/dizimistas', async (req, res) => {
+  server.js:1156:    let conn;
+  server.js:1157:    try {
+> server.js:1158:        conn = await getOracleConnection();
+  server.js:1159:        // Busca dizimistas que possuem celular preenchido
+  server.js:1160:        const result = await conn.execute(`
+  server.js:1161:            SELECT NOME, TELEFONE 
+  server.js:1162:            FROM DIZIMISTAS 
+  server.js:1163:            WHERE TELEFONE IS NOT NULL AND STATUS = 1 AND ROWNUM <= 500
+  server.js:1164:            ORDER BY NOME ASC
+  server.js:1165:        `);
+  server.js:1166:        res.json(result.rows);
+  server.js:1167:    } catch (err) {
+  server.js:1168:        console.error('Erro ao buscar dizimistas:', err);
+  server.js:1169:        res.status(500).json({ error: err.message });
+  server.js:1170:    } finally {
+  server.js:1171:        if (conn) await conn.close();
+  server.js:1172:    }
+  server.js:1173:});
+  server.js:1174:
+  server.js:1175:// --- API de Configuração Global ---
+  server.js:1176:app.get('/api/config', (req, res) => {
+  server.js:1177:    res.json(systemConfig);
+  server.js:1178:});
+  server.js:1179:
+  server.js:1180:app.post('/api/config', (req, res) => {
+  server.js:1181:    const { messagingEnabled, autoReplyEnabled, geminiApiKey, chavePixParoquia, telegramToken, 
+telegramChatId, telegramAlertsEnabled } = req.body;
+  server.js:1182:    if (typeof messagingEnabled === 'boolean') systemConfig.messagingEnabled = messagingEnabled;
+  server.js:1183:    if (typeof autoReplyEnabled === 'boolean') systemConfig.autoReplyEnabled = autoReplyEnabled;
+  server.js:1184:    if (typeof geminiApiKey === 'string') systemConfig.geminiApiKey = geminiApiKey;
+  server.js:1185:    if (typeof chavePixParoquia === 'string') systemConfig.chavePixParoquia = chavePixParoquia;
+  server.js:1186:    if (typeof telegramToken === 'string') systemConfig.telegramToken = telegramToken;
+  server.js:1187:    if (typeof telegramChatId === 'string') systemConfig.telegramChatId = telegramChatId;
+  server.js:1188:    if (typeof telegramAlertsEnabled === 'boolean') systemConfig.telegramAlertsEnabled = 
+telegramAlertsEnabled;
+  server.js:1189:    saveConfig();
+  server.js:1190:    res.json({ success: true, config: systemConfig });
+  server.js:1191:});
+  server.js:1192:
+  server.js:1193:app.post('/api/config/test-telegram', async (req, res) => {
+  server.js:1194:    const { telegramToken, telegramChatId } = req.body;
+  server.js:1195:    const tokenToUse = telegramToken !== undefined ? telegramToken : systemConfig.telegramToken;
+  server.js:1196:    const chatIdToUse = telegramChatId !== undefined ? telegramChatId : systemConfig.telegramChatId;
+  server.js:1197:
+  server.js:1198:    if (!tokenToUse || !chatIdToUse) {
+  server.js:1199:        return res.status(400).json({ success: false, error: 'Token ou Chat ID não fornecido.' });
+  server.js:1200:    }
+  server.js:1201:
+  server.js:1202:    try {
+  server.js:1203:        await sendTelegramAlertDirect(tokenToUse, chatIdToUse, '🔔 *Chatbot Paróquia:* Teste de envio 
+de alerta via Telegram realizado com sucesso! 🎉');
+  server.js:1204:        res.json({ success: true });
+  server.js:1205:    } catch (err) {
+  server.js:1206:        console.error('[TELEGRAM] Erro no envio de teste:', err);
+  server.js:1207:        res.status(500).json({ success: false, error: err.message });
+  server.js:1208:    }
+> server.js:1381:                                conn = await getOracleConnection();
+  server.js:1382:                                // Validação de Duplicidade de Autenticação
+  server.js:1383:                                if (dadosRecibo.auth_code && dadosRecibo.auth_code.trim() !== '') {
+  server.js:1384:                                    const resAuth = await conn.execute(`
+  server.js:1385:                                        SELECT COUNT(*) as QTD FROM RECEBIMENTOS WHERE AUTENTICACAO = 
+:auth
+  server.js:1386:                                    `, { auth: dadosRecibo.auth_code.trim() });
+  server.js:1387:                                    if (resAuth.rows[0].QTD > 0) {
+  server.js:1388:                                        await msg.reply('⚠️ *Atenção:* Identifiquei que este 
+comprovante já foi enviado e registrado no sistema anteriormente (Código de Autenticação duplicado). Não é possível 
+enviar o mesmo recibo mais de uma vez.');
+  server.js:1389:                                        return;
+  server.js:1390:                                    }
+  server.js:1391:                                }
+  server.js:1392:
+  server.js:1393:                                // Busca dizimista pelos dados do recibo
+  server.js:1394:                                let dizimistasEncontrados = await 
+buscarDizimistasPorNomeCpfTelefone(dadosRecibo.payer_name, dadosRecibo.payer_cpf, conn);
+  server.js:1395:
+  server.js:1396:                                if (dizimistasEncontrados.length === 1) {
+  server.js:1397:                                    const d = dizimistasEncontrados[0];
+  server.js:1398:                                    // Pede confirmacao
+  server.js:1399:                                    userStates[phone] = {
+  server.js:1400:                                        flowId: 'confirmar_dizimista_recibo',
+  server.js:1401:                                        dizimistaCanditado: d,
+  server.js:1402:                                        dadosRecibo: dadosRecibo,
+  server.js:1403:                                        base64Image: media.data
+  server.js:1404:                                    };
+  server.js:1405:                                    await msg.reply(`Identifiquei que este comprovante pertence a 
+*${d.NOME}*.\n\nConfirma?\n1 - Sim\n2 - Não`);
+  server.js:1406:                                    return;
+  server.js:1407:                                } else if (dizimistasEncontrados.length > 1) {
+  server.js:1408:                                    userStates[phone] = {
+  server.js:1409:                                        flowId: 'selecionar_dizimista_recibo',
+  server.js:1410:                                        dizimistasCandidatos: dizimistasEncontrados,
+  server.js:1411:                                        dadosRecibo: dadosRecibo,
+  server.js:1412:                                        base64Image: media.data
+  server.js:1413:                                    };
+  server.js:1414:                                    let msgOpcoes = `Identifiquei mais de um cadastro com os dados do 
+recibo. Responda com o *NÚMERO* correspondente ao dizimista correto:\n\n`;
+  server.js:1415:                                    dizimistasEncontrados.forEach((d, idx) => {
+  server.js:1416:                                        msgOpcoes += `*${idx + 1}* - ${d.NOME}\n`;
+  server.js:1417:                                    });
+  server.js:1418:                                    msgOpcoes += `\n*0* - Nenhum destes / Digitar manualmente`;
+  server.js:1419:                                    await msg.reply(msgOpcoes);
+  server.js:1420:                                    return;
+  server.js:1421:                                } else {
+  server.js:1422:                                    userStates[phone] = {
+  server.js:1423:                                        flowId: 'buscar_dizimista_recibo',
+  server.js:1424:                                        dadosRecibo: dadosRecibo,
+  server.js:1425:                                        base64Image: media.data
+  server.js:1426:                                    };
+  server.js:1427:                                    await msg.reply('Não consegui identificar com certeza o dizimista 
+pelo comprovante.\n\nPor favor, digite o *Nome*, *CPF* ou *Telefone* de quem realizou o pagamento para eu buscar no 
+sistema:');
+  server.js:1428:                                    return;
+  server.js:1429:                                }
+  server.js:1430:
+  server.js:1431:                            } catch(dbErr) {
+> server.js:1501:                    connPasCheck = await getOracleConnection();
+  server.js:1502:                    const resPas = await connPasCheck.execute(
+  server.js:1503:                        `SELECT 1 FROM DIZIMISTA_PASTORAL dp 
+  server.js:1504:                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+  server.js:1505:                         WHERE d.ID_DIZIMISTA = :id AND d.STATUS = 1 AND ROWNUM = 1`,
+  server.js:1506:                        { id: userData.id }
+  server.js:1507:                    );
+  server.js:1508:                    temPastoral = resPas.rows.length > 0;
+  server.js:1509:                } catch (e) {
+  server.js:1510:                    console.error('[PASTORAL-CHECK] Erro ao verificar pastoral:', e);
+  server.js:1511:                    temPastoral = true; // em caso de erro, deixa passar para o menu
+  server.js:1512:                } finally {
+  server.js:1513:                    if (connPasCheck) await connPasCheck.close();
+  server.js:1514:                }
+  server.js:1515:
+  server.js:1516:                // Saudação baseada no horário
+  server.js:1517:                const hour = new Date().getHours();
+  server.js:1518:                let saudacao = 'Boa noite';
+  server.js:1519:                if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
+  server.js:1520:                else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+  server.js:1521:                const primeiroNome = (userData.apelido || userData.nome).split(' ')[0];
+  server.js:1522:
+  server.js:1523:                if (!temPastoral) {
+  server.js:1524:                    // Sem pastoral → perguntar se participa de alguma
+  server.js:1525:                    userStates[phone] = {
+  server.js:1526:                        flowId: 'pastoral_participar',
+  server.js:1527:                        idDizimista: userData.id,
+  server.js:1528:                        nomeDizimista: userData.nome,
+  server.js:1529:                        apelidoDizimista: userData.apelido
+  server.js:1530:                    };
+  server.js:1531:                    await msg.reply(
+  server.js:1532:                        `*${saudacao}, ${primeiroNome}!* 🙏\n\n` +
+  server.js:1533:                        `Notamos que você ainda não está vinculado a nenhuma pastoral no 
+sistema.\n\n` +
+  server.js:1534:                        `Você participa de alguma pastoral na paróquia?\n\n` +
+  server.js:1535:                        `Digite *S* para sim ou *N* para não.`
+  server.js:1536:                    );
+  server.js:1537:                    console.log(`[PASTORAL] Dizimista ${userData.nome} sem pastoral — perguntando 
+participação.`);
+  server.js:1538:                    return;
+  server.js:1539:                }
+  server.js:1540:
+  server.js:1541:                // Com pastoral → comportamento normal
+  server.js:1542:                const mainFlow = chatFlows['main_menu'];
+  server.js:1543:                if (!mainFlow) {
+  server.js:1544:                    await msg.reply(`*Olá, ${userData.nome}!* 🙏\nSeja bem-vindo. No momento nosso 
+menu está em manutenção.`);
+  server.js:1545:                    return;
+  server.js:1546:                }
+  server.js:1547:
+  server.js:1548:                userStates[phone] = {
+  server.js:1549:                    flowId: 'main_menu',
+  server.js:1550:                    idDizimista: userData.id,
+  server.js:1551:                    nomeDizimista: userData.nome,
+> server.js:1657:                        conn = await getOracleConnection();
+  server.js:1658:
+  server.js:1659:                        // 1. Verificar permissão (Usuário do Sistema com permissão "Visualizar 
+Missas" - ID 15)
+  server.js:1660:                        const resPerm = await conn.execute(`
+  server.js:1661:                            SELECT 1 FROM USUARIOS u
+  server.js:1662:                            JOIN PERFIL_PERMISSAO pp ON u.ID_PERFIL = pp.ID_PERFIL
+  server.js:1663:                            WHERE u.ID_DIZIMISTA = :id AND pp.ID_PERMISSAO = 15
+  server.js:1664:                        `, { id: state.idDizimista });
+  server.js:1665:
+  server.js:1666:                        if (resPerm.rows.length === 0) {
+  server.js:1667:                            await msg.reply("Você não tem permissão para visualizar a escala 
+detalhada desta missa. Entre em contato com seu coordenador.");
+  server.js:1668:                            return;
+  server.js:1669:                        }
+  server.js:1670:
+  server.js:1671:                        // 2. Buscar detalhes da missa (incluindo descrição se existir)
+  server.js:1672:                        const resMissa = await conn.execute(`
+  server.js:1673:                            SELECT COMUNIDADE, CELEBRANTE, 
+  server.js:1674:                                   TO_CHAR(TO_DATE(DATA_MISSA, 'YYYY-MM-DD'), 'DD/MM/YYYY') as 
+DATA_FMT,
+  server.js:1675:                                   HORA 
+  server.js:1676:                            FROM MISSAS WHERE ID_MISSA = :id
+  server.js:1677:                        `, { id: selectedMass.ID_MISSA });
+  server.js:1678:
+  server.js:1679:                        const mData = resMissa.rows[0];
+  server.js:1680:
+  server.js:1681:                        // 3. Buscar Pastorais e Servos
+  server.js:1682:                        const resServos = await conn.execute(`
+  server.js:1683:                            SELECT p.NOME as PASTORAL, NVL(d.APELIDO, d.NOME) as SERVO
+  server.js:1684:                            FROM MISSA_SERVOS ms
+  server.js:1685:                            JOIN PASTORAIS p ON ms.ID_PASTORAL = p.ID_PASTORAL
+  server.js:1686:                            JOIN DIZIMISTAS d ON ms.ID_DIZIMISTA = d.ID_DIZIMISTA
+  server.js:1687:                            WHERE ms.ID_MISSA = :id
+  server.js:1688:                            ORDER BY p.NOME, d.NOME
+  server.js:1689:                        `, { id: selectedMass.ID_MISSA });
+  server.js:1690:
+  server.js:1691:                        let response = `📍 *DETALHES DA MISSA*\n\n`;
+  server.js:1692:                        response += `📅 *Data:* ${mData.DATA_FMT} às ${mData.HORA}\n`;
+  server.js:1693:                        response += `⛪ *Comunidade:* ${mData.COMUNIDADE}\n`;
+  server.js:1694:                        if (mData.CELEBRANTE) response += `👤 *Celebrante:* ${mData.CELEBRANTE}\n`;
+  server.js:1695:                        response += `\n📋 *ESCALA DE SERVOS:*\n`;
+  server.js:1696:
+  server.js:1697:                        if (resServos.rows.length === 0) {
+  server.js:1698:                            response += "_Nenhum servo escalado ainda._\n";
+  server.js:1699:                        } else {
+  server.js:1700:                            let currentPastoral = "";
+  server.js:1701:                            resServos.rows.forEach(s => {
+  server.js:1702:                                if (s.PASTORAL !== currentPastoral) {
+  server.js:1703:                                    currentPastoral = s.PASTORAL;
+  server.js:1704:                                    response += `\n🛠 *${currentPastoral}:*\n`;
+  server.js:1705:                                }
+  server.js:1706:                                response += `• ${s.SERVO}\n`;
+  server.js:1707:                            });
+> server.js:1734:                    conn = await getOracleConnection();
+  server.js:1735:
+  server.js:1736:                    // 1. Gravar alteração na tabela MISSAS
+  server.js:1737:                    await conn.execute(`
+  server.js:1738:                        UPDATE MISSAS SET CELEBRANTE = :nome WHERE ID_MISSA = :id
+  server.js:1739:                    `, { nome: novoCelebrante, id: mass.ID_MISSA });
+  server.js:1740:
+  server.js:1741:                    // 2. Gravar Log de Auditoria
+  server.js:1742:                    await conn.execute(`
+  server.js:1743:                        INSERT INTO AUDITORIA (TABELA, ID_REGISTRO, OPERACAO, USUARIO, DATA_HORA, 
+DADOS_ANTERIORES, DADOS_NOVOS)
+  server.js:1744:                        VALUES ('MISSAS', :idreg, 'UPDATE_CELEBRANTE', :username, SYSDATE, :dold, 
+:dnew)
+  server.js:1745:                    `, {
+  server.js:1746:                        idreg: mass.ID_MISSA,
+  server.js:1747:                        username: state.nomeDizimista,
+  server.js:1748:                        dold: JSON.stringify({ celebrante: mass.CELEBRANTE }),
+  server.js:1749:                        dnew: JSON.stringify({ celebrante: novoCelebrante })
+  server.js:1750:                    });
+  server.js:1751:
+  server.js:1752:                    await msg.reply(`✅ Celebrante atualizado com sucesso para: *${novoCelebrante}*!`);
+  server.js:1753:
+  server.js:1754:                    // 3. Repete o menu de missas atualizado
+  server.js:1755:                    const result = await internalFunctions.listarMissas(msg, contact, {
+  server.js:1756:                        id: state.idDizimista,
+  server.js:1757:                        nome: state.nomeDizimista,
+  server.js:1758:                        apelido: state.apelidoDizimista,
+  server.js:1759:                        idPerfil: state.idPerfil,
+  server.js:1760:                        isPadre: state.isPadre
+  server.js:1761:                    });
+  server.js:1762:                    await msg.reply(result);
+  server.js:1763:
+  server.js:1764:                } catch (err) {
+  server.js:1765:                    console.error('Erro ao editar celebrante:', err);
+  server.js:1766:                    await msg.reply(`⚠️ Houve um erro ao salvar o novo celebrante: ${err.message || 
+'Erro desconhecido'}`);
+  server.js:1767:                } finally {
+  server.js:1768:                    if (conn) await conn.close();
+  server.js:1769:                }
+  server.js:1770:
+  server.js:1771:            } else if (state.flowId === 'cancelar_selecao') {
+  server.js:1772:                console.log(`[STATE] Usuário ${phone} selecionando missa para cancelar: ${text}`);
+  server.js:1773:
+  server.js:1774:                if (text === '0') {
+  server.js:1775:                    const mainFlow = chatFlows['main_menu'];
+  server.js:1776:                    if (mainFlow) {
+  server.js:1777:                        await msg.reply(mainFlow.message);
+  server.js:1778:                        userStates[phone] = {
+  server.js:1779:                            flowId: 'main_menu',
+  server.js:1780:                            idDizimista: state.idDizimista,
+  server.js:1781:                            nomeDizimista: state.nomeDizimista,
+  server.js:1782:                            apelidoDizimista: state.apelidoDizimista
+  server.js:1783:                        };
+  server.js:1784:                    }
+> server.js:1795:                        conn = await getOracleConnection();
+  server.js:1796:
+  server.js:1797:                        // Excluir inscrição
+  server.js:1798:                        await conn.execute(`
+  server.js:1799:                        DELETE FROM MISSA_SERVOS WHERE ID_MISSA = :m AND ID_DIZIMISTA = :d
+  server.js:1800:                    `, { m: selectedMass.ID_MISSA, d: state.idDizimista });
+  server.js:1801:
+  server.js:1802:                        await msg.reply(`✅ Confirmação: Sua participação na missa de 
+*${selectedMass.DATA} às ${selectedMass.HORA}* foi cancelada. Os coordenadores foram notificados.`);
+  server.js:1803:
+  server.js:1804:                        // Buscar coordenadores da pastoral
+  server.js:1805:                        try {
+  server.js:1806:                            const resCoord = await conn.execute(`
+  server.js:1807:                            SELECT d.TELEFONE, d.NOME 
+  server.js:1808:                            FROM DIZIMISTA_PASTORAL dp
+  server.js:1809:                            JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+  server.js:1810:                            WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C' AND d.STATUS = 1
+  server.js:1811:                        `, { p: selectedMass.ID_PASTORAL });
+  server.js:1812:
+  server.js:1813:                            // Enfileirar notificação para coordenadores na tabela MENSAGENS
+  server.js:1814:                            for (const coord of resCoord.rows) {
+  server.js:1815:                                if (coord.TELEFONE) {
+  server.js:1816:                                    const sms = `O servo ${state.apelidoDizimista || 
+state.nomeDizimista} acabou de cancelar sua participação na missa do dia ${selectedMass.DATA} das 
+${selectedMass.HORA}`;
+  server.js:1817:
+  server.js:1818:                                    await conn.execute(`
+  server.js:1819:                                    INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) 
+  server.js:1820:                                    VALUES (:tel, :txt, 0)
+  server.js:1821:                                `, {
+  server.js:1822:                                        tel: coord.TELEFONE,
+  server.js:1823:                                        txt: sms
+  server.js:1824:                                    });
+  server.js:1825:                                }
+  server.js:1826:                            }
+  server.js:1827:                        } catch (errCoord) {
+  server.js:1828:                            console.error("Erro ao buscar coordenadores ou enviar alerta:", errCoord);
+  server.js:1829:                        }
+  server.js:1830:
+  server.js:1831:                        delete userStates[phone];
+  server.js:1832:                    } catch (err) {
+  server.js:1833:                        console.error('Erro ao excluir missa_servos:', err);
+  server.js:1834:                        await msg.reply("Houve um erro no banco de dados ao tentar processar seu 
+cancelamento.");
+  server.js:1835:                    } finally {
+  server.js:1836:                        if (conn) await conn.close();
+  server.js:1837:                    }
+  server.js:1838:                } else {
+  server.js:1839:                    await msg.reply("Opção inválida. Por favor, escolha o número correspondente à 
+missa na lista acima.");
+  server.js:1840:                }
+  server.js:1841:            } else if (state.flowId === 'cadastro_cpf') {
+  server.js:1842:                // ── Etapa: Usuário informou CPF para busca ──
+  server.js:1843:                const cpfDigitado = text.replace(/\D/g, '');
+  server.js:1844:                if (cpfDigitado.length !== 11) {
+  server.js:1845:                    await msg.reply('CPF inválido. Por favor, informe os *11 dígitos* do seu CPF 
+(apenas números):');
+> server.js:1850:                    conn = await getOracleConnection();
+  server.js:1851:                    const resCPF = await conn.execute(
+  server.js:1852:                        `SELECT ID_DIZIMISTA, NOME, TELEFONE FROM DIZIMISTAS WHERE 
+REGEXP_REPLACE(CPF,'[^0-9]','') = :cpf AND STATUS = 1`,
+  server.js:1853:                        { cpf: cpfDigitado }
+  server.js:1854:                    );
+  server.js:1855:                    if (resCPF.rows.length > 0) {
+  server.js:1856:                        const diz = resCPF.rows[0];
+  server.js:1857:                        const telAtual = diz.TELEFONE ? diz.TELEFONE.replace(/\D/g, '') : '';
+  server.js:1858:                        const isLid = phone.replace(/\D/g, '').length >= 12 && 
+!/^55\d{10,11}$/.test(phone.replace(/\D/g, ''));
+  server.js:1859:                        userStates[phone] = {
+  server.js:1860:                            flowId: 'cadastro_confirmar_telefone',
+  server.js:1861:                            idDizimista: diz.ID_DIZIMISTA,
+  server.js:1862:                            nomeDizimista: diz.NOME,
+  server.js:1863:                            isLid: isLid
+  server.js:1864:                        };
+  server.js:1865:                        if (isLid) {
+  server.js:1866:                            await msg.reply(
+  server.js:1867:                                `✅ Encontramos um cadastro para o CPF informado!\n\n` +
+  server.js:1868:                                `*Nome:* ${diz.NOME}\n\n` +
+  server.js:1869:                                `O número de onde você está falando aparece oculto por políticas de 
+privacidade do WhatsApp (como um ID de dispositivo interno).\n\n` +
+  server.js:1870:                                `Deseja *vincular este dispositivo* ao seu cadastro para não precisar 
+digitar o CPF nas próximas vezes?\n\n` +
+  server.js:1871:                                `Digite *S* para confirmar ou *N* para cancelar.`
+  server.js:1872:                            );
+  server.js:1873:                        } else {
+  server.js:1874:                            await msg.reply(
+  server.js:1875:                                `✅ Encontramos um cadastro para o CPF informado!\n\n` +
+  server.js:1876:                                `*Nome:* ${diz.NOME}\n` +
+  server.js:1877:                                `*Telefone cadastrado:* ${telAtual || 'não informado'}\n\n` +
+  server.js:1878:                                `Deseja atualizar o telefone cadastrado para o número atual que está 
+sendo usado?\n\n` +
+  server.js:1879:                                `Digite *S* para confirmar ou *N* para cancelar.`
+  server.js:1880:                            );
+  server.js:1881:                        }
+  server.js:1882:                    } else {
+  server.js:1883:                        // CPF não encontrado → valida dígitos antes de buscar por telefone
+  server.js:1884:                        if (!validarCPF(cpfDigitado)) {
+  server.js:1885:                            await msg.reply(
+  server.js:1886:                                `❌ O CPF *${cpfDigitado}* é inválido (dígitos verificadores 
+incorretos).\n\n` +
+  server.js:1887:                                `Por favor, verifique o número e informe novamente o seu *CPF* 
+(apenas 11 dígitos):`
+  server.js:1888:                            );
+  server.js:1889:                            // Mantém o flowId 'cadastro_cpf' para nova tentativa
+  server.js:1890:                            return;
+  server.js:1891:                        }
+  server.js:1892:                        // CPF válido e não cadastrado → solicita celular para busca
+  server.js:1893:                        userStates[phone] = { flowId: 'cadastro_telefone_busca', cpf: cpfDigitado };
+  server.js:1894:                        await msg.reply(
+  server.js:1895:                            `Não encontramos nenhum cadastro com esse CPF. 🔍\n\n` +
+  server.js:1896:                            `Por favor, informe o seu número de *celular com DDD* (apenas números, 
+ex: 11999999999) para buscarmos pelo telefone:\n\n` +
+  server.js:1897:                            `*Lembre-se:* Digite o DDD com 2 dígitos e o número do celular com 9 
+dígitos.`
+  server.js:1898:                        );
+  server.js:1899:                    }
+  server.js:1900:                } catch (err) {
+> server.js:1971:                        conn = await getOracleConnection();
+  server.js:1972:                        const rawPhoneStr = phone.replace(/\D/g, '');
+  server.js:1973:                        const isLidCheck = state.isLid || (rawPhoneStr.length >= 12 && 
+!/^55\d{10,11}$/.test(rawPhoneStr));
+  server.js:1974:                        const mainFlow = chatFlows['main_menu'];
+  server.js:1975:                        const hour = new Date().getHours();
+  server.js:1976:                        let saudacao = 'Boa noite';
+  server.js:1977:                        if (hour >= 5 && hour < 12) saudacao = 'Bom dia';
+  server.js:1978:                        else if (hour >= 12 && hour < 18) saudacao = 'Boa tarde';
+  server.js:1979:                        
+  server.js:1980:                        if (isLidCheck) {
+  server.js:1981:                            // Vincula LID no banco usando os dígitos originais
+  server.js:1982:                            await conn.execute(
+  server.js:1983:                                `UPDATE DIZIMISTAS SET WHATSAPP_ID = :lid WHERE ID_DIZIMISTA = :id`,
+  server.js:1984:                                { lid: rawPhoneStr, id: state.idDizimista }
+  server.js:1985:                            );
+  server.js:1986:                            console.log(`[CADASTRO] WHATSAPP_ID vinculado para o dizimista ID 
+${state.idDizimista}`);
+  server.js:1987:                            dizimistasContactCache = null;
+  server.js:1988:
+  server.js:1989:                            await msg.reply(
+  server.js:1990:                                `✅ Dispositivo vinculado com sucesso! ${saudacao}, 
+*${state.nomeDizimista}*! 🙏\n\n` +
+  server.js:1991:                                `O sistema agora irá reconhecê-lo(a) automaticamente nas próximas 
+vezes.\n\n` +
+  server.js:1992:                                (mainFlow ? mainFlow.message : 'Use *menu* para ver as opções.')
+  server.js:1993:                            );
+  server.js:1994:                        } else {
+  server.js:1995:                            const telNacional = phone.replace(/^55/, '');
+  server.js:1996:                            await conn.execute(
+  server.js:1997:                                `UPDATE DIZIMISTAS SET TELEFONE = :tel WHERE ID_DIZIMISTA = :id`,
+  server.js:1998:                                { tel: telNacional, id: state.idDizimista }
+  server.js:1999:                            );
+  server.js:2000:                            console.log(`[CADASTRO] Telefone atualizado para o dizimista ID 
+${state.idDizimista}`);
+  server.js:2001:                            // Invalida cache de contatos
+  server.js:2002:                            dizimistasContactCache = null;
+  server.js:2003:
+  server.js:2004:                            await msg.reply(
+  server.js:2005:                                `✅ Telefone atualizado com sucesso! ${saudacao}, 
+*${state.nomeDizimista}*! 🙏\n\n` +
+  server.js:2006:                                (mainFlow ? mainFlow.message : 'Cadastro vinculado. Use *menu* para 
+ver as opções.')
+  server.js:2007:                            );
+  server.js:2008:                        }
+  server.js:2009:                        userStates[phone] = {
+  server.js:2010:                            flowId: 'main_menu',
+  server.js:2011:                            idDizimista: state.idDizimista,
+  server.js:2012:                            nomeDizimista: state.nomeDizimista,
+  server.js:2013:                            apelidoDizimista: state.nomeDizimista
+  server.js:2014:                        };
+  server.js:2015:                    } catch (err) {
+  server.js:2016:                        console.error('[CADASTRO] Erro ao atualizar telefone:', err);
+  server.js:2017:                        await msg.reply('Houve um erro ao atualizar o telefone. Tente novamente mais 
+tarde.');
+  server.js:2018:                        delete userStates[phone];
+  server.js:2019:                    } finally {
+  server.js:2020:                        if (conn) await conn.close();
+  server.js:2021:                    }
+> server.js:2123:                        conn = await getOracleConnection();
+  server.js:2124:                        const resPast = await conn.execute(
+  server.js:2125:                            `SELECT ID_PASTORAL, NOME, AUTOCADASTRO FROM PASTORAIS WHERE STATUS = 1 
+ORDER BY NOME ASC`
+  server.js:2126:                        );
+  server.js:2127:                        if (resPast.rows.length === 0) {
+  server.js:2128:                            await msg.reply(
+  server.js:2129:                                'No momento não há pastorais cadastradas no sistema.\n\n' +
+  server.js:2130:                                'Por favor, entre em contato com a secretaria para regularizar seu 
+cadastro.'
+  server.js:2131:                            );
+  server.js:2132:                            // Vai ao menu mesmo sem pastoral
+  server.js:2133:                            const mainFlow = chatFlows['main_menu'];
+  server.js:2134:                            if (mainFlow) {
+  server.js:2135:                                userStates[phone] = { flowId: 'main_menu', idDizimista: 
+state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+  server.js:2136:                                await msg.reply(mainFlow.message);
+  server.js:2137:                            }
+  server.js:2138:                            return;
+  server.js:2139:                        }
+  server.js:2140:
+  server.js:2141:                        userStates[phone] = {
+  server.js:2142:                            flowId: 'pastoral_selecao',
+  server.js:2143:                            idDizimista: state.idDizimista,
+  server.js:2144:                            nomeDizimista: state.nomeDizimista,
+  server.js:2145:                            apelidoDizimista: state.apelidoDizimista,
+  server.js:2146:                            pastoraisDisponiveis: resPast.rows
+  server.js:2147:                        };
+  server.js:2148:
+  server.js:2149:                        let resp = `*Pastorais da Paróquia* 🙏\n\nEscolha o *número* da pastoral em 
+que você participa:\n\n`;
+  server.js:2150:                        resPast.rows.forEach((p, idx) => {
+  server.js:2151:                            const icone = p.AUTOCADASTRO === 1 ? '✅' : '💬';
+  server.js:2152:                            resp += `*${idx + 1}* — ${p.NOME} ${icone}\n`;
+  server.js:2153:                        });
+  server.js:2154:                        resp += `\n✅ Entrada imediata  |  💬 Sujeito a aprovação do 
+coordenador\n\n*0* — Não participo de nenhuma`;
+  server.js:2155:                        await msg.reply(resp);
+  server.js:2156:
+  server.js:2157:                    } catch (err) {
+  server.js:2158:                        console.error('[PASTORAL] Erro ao listar pastorais:', err);
+  server.js:2159:                        await msg.reply('Erro ao buscar pastorais. Tente novamente mais tarde.');
+  server.js:2160:                    } finally {
+  server.js:2161:                        if (conn) await conn.close();
+  server.js:2162:                    }
+  server.js:2163:                } else if (resposta === 'n' || resposta === 'nao' || resposta === 'não') {
+  server.js:2164:                    // Não participa → vai ao menu principal
+  server.js:2165:                    const mainFlow = chatFlows['main_menu'];
+  server.js:2166:                    userStates[phone] = { flowId: 'main_menu', idDizimista: state.idDizimista, 
+nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+  server.js:2167:                    await msg.reply(
+  server.js:2168:                        'Tudo bem! Quando quiser se vincular a uma pastoral, fale com o 
+coordenador.\n\n' +
+  server.js:2169:                        (mainFlow ? mainFlow.message : '_Digite *menu* para ver as opções._')
+  server.js:2170:                    );
+  server.js:2171:                } else {
+  server.js:2172:                    await msg.reply('Por favor, responda apenas *S* (sim) ou *N* (não).');
+  server.js:2173:                }
+> server.js:2203:                    conn = await getOracleConnection();
+  server.js:2204:
+  server.js:2205:                    if (autocadastro === 1) {
+  server.js:2206:                        // --- AUTOCADASTRO: insere diretamente ---
+  server.js:2207:                        // Verifica se já existe (segurança)
+  server.js:2208:                        const jaExiste = await conn.execute(
+  server.js:2209:                            `SELECT 1 FROM DIZIMISTA_PASTORAL WHERE ID_DIZIMISTA = :d AND ID_PASTORAL 
+= :p`,
+  server.js:2210:                            { d: state.idDizimista, p: idPastoral }
+  server.js:2211:                        );
+  server.js:2212:                        if (jaExiste.rows.length === 0) {
+  server.js:2213:                            await conn.execute(
+  server.js:2214:                                `INSERT INTO DIZIMISTA_PASTORAL (ID_DIZIMISTA, ID_PASTORAL, PAPEL) 
+VALUES (:d, :p, 'M')`,
+  server.js:2215:                                { d: state.idDizimista, p: idPastoral }
+  server.js:2216:                            );
+  server.js:2217:                        }
+  server.js:2218:                        // Notifica coordenadores que o servo se cadastrou
+  server.js:2219:                        const resCoord = await conn.execute(
+  server.js:2220:                            `SELECT d.TELEFONE FROM DIZIMISTA_PASTORAL dp
+  server.js:2221:                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+  server.js:2222:                         WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C'`,
+  server.js:2223:                            { p: idPastoral }
+  server.js:2224:                        );
+  server.js:2225:                        for (const coord of resCoord.rows) {
+  server.js:2226:                            if (coord.TELEFONE) {
+  server.js:2227:                                await conn.execute(
+  server.js:2228:                                    `INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) VALUES (:tel, 
+:txt, 0)`,
+  server.js:2229:                                    {
+  server.js:2230:                                        tel: coord.TELEFONE,
+  server.js:2231:                                        txt: `🟢 O servo *${nomeServo}* se cadastrou na pastoral 
+*${nomePastoral}* pelo chatbot.`
+  server.js:2232:                                    }
+  server.js:2233:                                );
+  server.js:2234:                            }
+  server.js:2235:                        }
+  server.js:2236:                        await msg.reply(
+  server.js:2237:                            `✅ Você foi cadastrado(a) com sucesso na pastoral *${nomePastoral}*! 
+🙏\n\n` +
+  server.js:2238:                            `O coordenador foi notificado.`
+  server.js:2239:                        );
+  server.js:2240:                        console.log(`[PASTORAL] ${nomeServo} cadastrado na pastoral "${nomePastoral}" 
+(autocadastro).`);
+  server.js:2241:                    } else {
+  server.js:2242:                        // --- SEM AUTOCADASTRO: apenas envia solicitação ao coordenador ---
+  server.js:2243:                        const resCoord = await conn.execute(
+  server.js:2244:                            `SELECT d.TELEFONE FROM DIZIMISTA_PASTORAL dp
+  server.js:2245:                         JOIN DIZIMISTAS d ON dp.ID_DIZIMISTA = d.ID_DIZIMISTA
+  server.js:2246:                         WHERE dp.ID_PASTORAL = :p AND dp.PAPEL = 'C' AND d.STATUS = 1`,
+  server.js:2247:                            { p: idPastoral }
+  server.js:2248:                        );
+  server.js:2249:                        for (const coord of resCoord.rows) {
+  server.js:2250:                            if (coord.TELEFONE) {
+  server.js:2251:                                await conn.execute(
+  server.js:2252:                                    `INSERT INTO MENSAGENS (TELEFONE, TEXTO, STATUS) VALUES (:tel, 
+:txt, 0)`,
+  server.js:2253:                                    {
+> server.js:2315:                    conn = await getOracleConnection();
+  server.js:2316:                    let dizimistasEncontrados = await buscarDizimistasPorNomeCpfTelefone(text, null, 
+conn);
+  server.js:2317:                    if (dizimistasEncontrados.length === 1) {
+  server.js:2318:                        const d = dizimistasEncontrados[0];
+  server.js:2319:                        userStates[phone] = {
+  server.js:2320:                            flowId: 'confirmar_dizimista_recibo',
+  server.js:2321:                            dizimistaCanditado: d,
+  server.js:2322:                            dadosRecibo: state.dadosRecibo,
+  server.js:2323:                            base64Image: state.base64Image
+  server.js:2324:                        };
+  server.js:2325:                        await msg.reply(`Encontrei o cadastro de *${d.NOME}*.\n\nConfirma?\n1 - 
+Sim\n2 - Não`);
+  server.js:2326:                    } else if (dizimistasEncontrados.length > 1) {
+  server.js:2327:                        userStates[phone] = {
+  server.js:2328:                            flowId: 'selecionar_dizimista_recibo',
+  server.js:2329:                            dizimistasCandidatos: dizimistasEncontrados,
+  server.js:2330:                            dadosRecibo: state.dadosRecibo,
+  server.js:2331:                            base64Image: state.base64Image
+  server.js:2332:                        };
+  server.js:2333:                        let msgOpcoes = `Encontrei mais de um cadastro. Responda com o *NÚMERO* 
+correspondente:\n\n`;
+  server.js:2334:                        dizimistasEncontrados.forEach((d, idx) => {
+  server.js:2335:                            msgOpcoes += `*${idx + 1}* - ${d.NOME}\n`;
+  server.js:2336:                        });
+  server.js:2337:                        msgOpcoes += `\n*0* - Nenhum destes (tentar outra busca)`;
+  server.js:2338:                        await msg.reply(msgOpcoes);
+  server.js:2339:                    } else {
+  server.js:2340:                        await msg.reply('Não encontrei nenhum cadastro com essa informação. Tente 
+digitar de outra forma (outro nome, ou telefone/CPF com todos os números):');
+  server.js:2341:                    }
+  server.js:2342:                } catch(dbErr) {
+  server.js:2343:                    console.error('Erro buscar_dizimista_recibo:', dbErr);
+  server.js:2344:                } finally {
+  server.js:2345:                    if (conn) await conn.close();
+  server.js:2346:                }
+  server.js:2347:            } else if (state.flowId === 'processar_competencia_recibo') {
+  server.js:2348:                const textNum = parseInt(text);
+  server.js:2349:                const recibo = state.reciboData;
+  server.js:2350:                
+  server.js:2351:                if (!isNaN(textNum) && recibo && recibo.opcoes) {
+  server.js:2352:                    const opcaoEscolhida = recibo.opcoes.find(o => o.num === textNum);
+  server.js:2353:                    
+  server.js:2354:                    if (opcaoEscolhida) {
+  server.js:2355:                        const competenciaEscolhida = opcaoEscolhida.comp;
+  server.js:2356:                        const comprovanteBuffer = Buffer.from(recibo.base64Image, 'base64');
+  server.js:2357:                        let conn;
+  server.js:2358:                        try {
+> server.js:2359:                            conn = await getOracleConnection();
+  server.js:2360:                            
+  server.js:2361:                            const obsBase = 'Lancamento com autoinformação atraves de recibo 
+carregado na plataforma.\n\n';
+  server.js:2362:                            const obsExtra = recibo.rawData ? `[DADOS EXTRAIDOS PELA 
+IA]\n${recibo.rawData}` : '';
+  server.js:2363:                            const observacaoFinal = (obsBase + obsExtra).substring(0, 1000); // 
+Limite de caracteres para garantir que não estoura o banco
+  server.js:2364:                            
+  server.js:2365:                            await conn.execute(`
+  server.js:2366:                                INSERT INTO RECEBIMENTOS 
+  server.js:2367:                                (ID_DIZIMISTA, DATA_RECEBIMENTO, COMPETENCIA, VALOR, 
+ID_TIPO_PAGAMENTO, ID_USUARIO, STATUS, OBSERVACAO, ID_TIPO_LANCAMENTO, COMPROVANTE, AUTENTICACAO)
+  server.js:2368:                                VALUES
+  server.js:2369:                                (:id, TO_DATE(:dataRec, 'YYYY-MM-DD'), :comp, :valor, 1, 1, 2, :obs, 
+1, :comprovante, :authcode)
+  server.js:2370:                            `, {
+  server.js:2371:                                id: state.idDizimista,
+  server.js:2372:                                dataRec: recibo.dataDB,
+  server.js:2373:                                comp: competenciaEscolhida,
+  server.js:2374:                                valor: recibo.valor,
+  server.js:2375:                                obs: observacaoFinal,
+  server.js:2376:                                comprovante: comprovanteBuffer,
+  server.js:2377:                                authcode: recibo.authCode || null
+  server.js:2378:                            });
+  server.js:2379:                            
+  server.js:2380:                            await msg.reply(`🎉 *Lançamento Pendente Confirmado!*\n\nO dízimo no 
+valor de R$ ${recibo.valor.toFixed(2).replace('.',',')} referente à competência *${competenciaEscolhida}* foi 
+registrado no sistema com sucesso (status pendente para validação). Muito obrigado, ${state.apelidoDizimista || 
+state.nomeDizimista}! 🙏`);
+  server.js:2381:                            
+  server.js:2382:                            // Retorna ao menu
+  server.js:2383:                            const mainFlow = chatFlows['main_menu'];
+  server.js:2384:                            userStates[phone] = { flowId: 'main_menu', idDizimista: 
+state.idDizimista, nomeDizimista: state.nomeDizimista, apelidoDizimista: state.apelidoDizimista };
+  server.js:2385:                            if (mainFlow) await msg.reply(mainFlow.message);
+  server.js:2386:                            
+  server.js:2387:                        } catch (dbErr) {
+  server.js:2388:                            console.error('Erro ao inserir recebimento:', dbErr);
+  server.js:2389:                            await msg.reply('⚠️ Ocorreu um erro ao salvar o lançamento no banco de 
+dados. Contate a secretaria.');
+  server.js:2390:                        } finally {
+  server.js:2391:                            if (conn) await conn.close();
+  server.js:2392:                        }
+  server.js:2393:                    } else {
+  server.js:2394:                        await msg.reply('Opção inválida. Digite um número correspondente a um dos 
+meses pendentes listados anteriormente, ou digite *CANCELAR*.');
+  server.js:2395:                    }
+  server.js:2396:                } else {
+  server.js:2397:                    await msg.reply('Opção inválida. Digite um número correspondente a um dos meses 
+pendentes listados anteriormente, ou digite *CANCELAR*.');
+  server.js:2398:                }
+  server.js:2399:            } else {
+  server.js:2400:                // Fallback para qualquer outra coisa: volta ao menu principal preservando ID
+  server.js:2401:                const mainFlow = chatFlows['main_menu'];
+  server.js:2402:                if (mainFlow) {
+  server.js:2403:                    await msg.reply(mainFlow.message);
+  server.js:2404:                    userStates[phone] = {
+  server.js:2405:                        flowId: 'main_menu',
+  server.js:2406:                        idDizimista: state.idDizimista,
+  server.js:2407:                        nomeDizimista: state.nomeDizimista,
+  server.js:2408:                        apelidoDizimista: state.apelidoDizimista
+  server.js:2409:                    };
+> server.js:2606:        conn = await getOracleConnection();
+  server.js:2607:
+  server.js:2608:        // Busca mensagens pendentes (incluindo o novo campo TIPO)
+  server.js:2609:        const result = await conn.execute(`
+  server.js:2610:            SELECT ID_MENSAGENS, TELEFONE, TEXTO, NVL(TIPO, 'T') as TIPO, IMAGEM
+  server.js:2611:            FROM MENSAGENS 
+  server.js:2612:            WHERE STATUS = 0
+  server.js:2613:            ORDER BY ID_MENSAGENS ASC
+  server.js:2614:        `, [], { fetchInfo: { "IMAGEM": { type: oracledb.BUFFER } } });
+  server.js:2615:
+  server.js:2616:        if (result.rows.length === 0) {
+  server.js:2617:            console.log('[ROUTINE] Nenhuma mensagem pendente.');
+  server.js:2618:            return;
+  server.js:2619:        }
+  server.js:2620:
+  server.js:2621:        console.log(`[ROUTINE] Encontradas ${result.rows.length} mensagens pendentes para envio.`);
+  server.js:2622:
+  server.js:2623:        for (const row of result.rows) {
+  server.js:2624:            // Verifica se o cliente ainda está ativo antes de cada envio
+  server.js:2625:            if (!isReady) {
+  server.js:2626:                console.log('[ROUTINE] WhatsApp desconectou durante a rotina. Abortando.');
+  server.js:2627:                break;
+  server.js:2628:            }
+  server.js:2629:
+  server.js:2630:            try {
+  server.js:2631:                let idMsg = row.ID_MENSAGENS;
+  server.js:2632:                let phone = row.TELEFONE;
+  server.js:2633:                let text = row.TEXTO;
+  server.js:2634:                let tipo = row.TIPO; // 'G' para Grupo, 'T' para Telefone
+  server.js:2635:
+  server.js:2636:                if (!phone || (!text && !row.IMAGEM)) {
+  server.js:2637:                    await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: 
+Telefone/ID ou conteúdo (texto/imagem) vazio' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+  server.js:2638:                    continue;
+  server.js:2639:                }
+  server.js:2640:
+  server.js:2641:                let targetId = null;
+  server.js:2642:
+  server.js:2643:                if (tipo === 'G') {
+  server.js:2644:                    // Trata como GRUPO: Usa o ID diretamente sem limpar números
+  server.js:2645:                    targetId = phone;
+  server.js:2646:                    if (!targetId.includes('@g.us')) {
+  server.js:2647:                        await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: ID de 
+grupo inválido (deve conter @g.us)' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+  server.js:2648:                        continue;
+  server.js:2649:                    }
+  server.js:2650:                } else {
+  server.js:2651:                    // Trata como TELEFONE individual: Mantém lógica original
+  server.js:2652:                    const cleanPhone = phone.replace(/\D/g, '');
+  server.js:2653:                    if (cleanPhone.length < 10) {
+  server.js:2654:                        await conn.execute(`UPDATE MENSAGENS SET STATUS = 2, RETORNO = 'Falha: Número 
+curto ou inválido' WHERE ID_MENSAGENS = :id`, { id: idMsg });
+  server.js:2655:                        continue;
+  server.js:2656:                    }
+
+
