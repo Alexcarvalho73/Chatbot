@@ -512,6 +512,43 @@ async function performHealthCheck(hour) {
     }
 }
 
+async function sendDailyMessageSummary() {
+    let conn;
+    try {
+        conn = await getOracleConnection();
+        const result = await conn.execute(`
+            SELECT STATUS, COUNT(*) AS QTD
+            FROM MENSAGENS
+            WHERE DATA_CADASTRO >= TRUNC(SYSDATE - 1)
+              AND DATA_CADASTRO < TRUNC(SYSDATE)
+            GROUP BY STATUS
+        `);
+
+        let successCount = 0;
+        let errorCount = 0;
+        let pendingCount = 0;
+
+        for (const row of result.rows) {
+            if (row.STATUS === 1) successCount = row.QTD;
+            else if (row.STATUS === 2) errorCount = row.QTD;
+            else if (row.STATUS === 0) pendingCount = row.QTD;
+        }
+
+        const messageText = 
+            `📊 *Resumo de Disparos - Ontem*\n\n` +
+            `✅ *Enviadas com sucesso:* ${successCount}\n` +
+            `❌ *Erros no envio:* ${errorCount}\n` +
+            `⏳ *Pendentes:* ${pendingCount}`;
+            
+        console.log(`[DAILY-SUMMARY] Enviando resumo diário via Telegram...`);
+        await sendTelegramAlert(messageText);
+    } catch (err) {
+        console.error('[DAILY-SUMMARY] Erro ao executar resumo diário:', err);
+    } finally {
+        if (conn) await conn.close();
+    }
+}
+
 function startHealthCheckScheduler() {
     console.log('[HEALTH-CHECK] Inicializando monitor de saúde (07:00, 12:00, 18:00)...');
     
@@ -525,6 +562,10 @@ function startHealthCheckScheduler() {
                 lastHealthCheckHour = hrs;
                 console.log(`[HEALTH-CHECK] Iniciando verificação programada das ${hrs}:00...`);
                 await performHealthCheck(hrs);
+                
+                if (hrs === 7) {
+                    await sendDailyMessageSummary();
+                }
             }
         } else {
             lastHealthCheckHour = -1;
