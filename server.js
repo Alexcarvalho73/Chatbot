@@ -519,8 +519,8 @@ async function sendDailyMessageSummary() {
         const result = await conn.execute(`
             SELECT STATUS, COUNT(*) AS QTD
             FROM MENSAGENS
-            WHERE DATA_CADASTRO >= TRUNC(SYSDATE - 1)
-              AND DATA_CADASTRO < TRUNC(SYSDATE)
+            WHERE DATAHORA >= TRUNC(SYSDATE - 1)
+              AND DATAHORA < TRUNC(SYSDATE)
             GROUP BY STATUS
         `);
 
