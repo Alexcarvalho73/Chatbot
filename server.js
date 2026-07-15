@@ -512,7 +512,7 @@ async function performHealthCheck(hour) {
     }
 }
 
-async function sendDailyMessageSummary() {
+async function sendDailyMessageSummary(isRestart = false) {
     let conn;
     try {
         conn = await getOracleConnection();
@@ -534,11 +534,15 @@ async function sendDailyMessageSummary() {
             else if (row.STATUS === 0) pendingCount = row.QTD;
         }
 
-        const messageText = 
+        let messageText = 
             `📊 *Resumo de Disparos - Ontem*\n\n` +
             `✅ *Enviadas com sucesso:* ${successCount}\n` +
             `❌ *Erros no envio:* ${errorCount}\n` +
             `⏳ *Pendentes:* ${pendingCount}`;
+            
+        if (isRestart) {
+            messageText = `🔄 *Servidor Acabou de Ser Reiniciado!*\n\n` + messageText;
+        }
             
         console.log(`[DAILY-SUMMARY] Enviando resumo diário via Telegram...`);
         await sendTelegramAlert(messageText);
@@ -564,7 +568,8 @@ function startHealthCheckScheduler() {
                 await performHealthCheck(hrs);
                 
                 if (hrs === 7) {
-                    await sendDailyMessageSummary();
+                    const isRestart = process.uptime() < 120; // Servidor reiniciado a menos de 2 min
+                    await sendDailyMessageSummary(isRestart);
                 }
             }
         } else {
