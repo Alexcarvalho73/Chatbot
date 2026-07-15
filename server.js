@@ -2719,10 +2719,24 @@ async function execMessageRoutine() {
                     }
 
                     try {
-                        const numberDetails = await Promise.race([
+                        let numberDetails = await Promise.race([
                             client.getNumberId(cleanPhone),
                             new Promise((_, rej) => setTimeout(() => rej(new Error('getNumberId timeout local')), 60000))
                         ]);
+
+                        // Fallback para o 9º dígito (Brasil)
+                        if (!numberDetails && cleanPhone.startsWith('55') && cleanPhone.length === 13) {
+                            // Tenta remover o 9 (DDD + 9 + 8 digitos -> DDD + 8 digitos)
+                            const phoneWithout9 = cleanPhone.substring(0, 4) + cleanPhone.substring(5);
+                            console.log(`[ROUTINE] Tentando fallback sem 9º dígito para: ${phoneWithout9}`);
+                            numberDetails = await client.getNumberId(phoneWithout9);
+                        } else if (!numberDetails && cleanPhone.startsWith('55') && cleanPhone.length === 12) {
+                            // Tenta adicionar o 9 (DDD + 8 digitos -> DDD + 9 + 8 digitos)
+                            const phoneWith9 = cleanPhone.substring(0, 4) + '9' + cleanPhone.substring(4);
+                            console.log(`[ROUTINE] Tentando fallback com 9º dígito para: ${phoneWith9}`);
+                            numberDetails = await client.getNumberId(phoneWith9);
+                        }
+
                         if (numberDetails) {
                             targetId = numberDetails._serialized;
                         } else {
