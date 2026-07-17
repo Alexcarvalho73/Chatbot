@@ -2760,15 +2760,34 @@ async function execMessageRoutine() {
                 if (targetId) {
                     let sentSuccess = false;
 
-                    // Valida se há imagem e se é JPG (Magic numbers: FF D8 FF)
-                    if (row.IMAGEM && row.IMAGEM.length > 3 && 
-                        row.IMAGEM[0] === 0xFF && row.IMAGEM[1] === 0xD8 && row.IMAGEM[2] === 0xFF) {
-                        
+                    let mimeType = '';
+                    let fileName = '';
+
+                    if (row.IMAGEM && row.IMAGEM.length > 4) {
+                        const header = row.IMAGEM;
+                        // JPG (FF D8 FF)
+                        if (header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF) {
+                            mimeType = 'image/jpeg';
+                            fileName = 'imagem.jpg';
+                        }
+                        // PNG (89 50 4E 47)
+                        else if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) {
+                            mimeType = 'image/png';
+                            fileName = 'imagem.png';
+                        }
+                        // PDF (%PDF -> 25 50 44 46)
+                        else if (header[0] === 0x25 && header[1] === 0x50 && header[2] === 0x44 && header[3] === 0x46) {
+                            mimeType = 'application/pdf';
+                            fileName = 'documento.pdf';
+                        }
+                    }
+
+                    if (mimeType) {
                         try {
-                            const media = new MessageMedia('image/jpeg', row.IMAGEM.toString('base64'), 'imagem.jpg');
+                            const media = new MessageMedia(mimeType, row.IMAGEM.toString('base64'), fileName);
                             await client.sendMessage(targetId, media, { caption: text });
                             sentSuccess = true;
-                            console.log(`[ROUTINE] Mensagem com IMAGEM ID ${idMsg} enviada com sucesso para ${tipo === 'G' ? 'Grupo' : 'Telefone'} ${phone}.`);
+                            console.log(`[ROUTINE] Mensagem com mídia (${mimeType}) ID ${idMsg} enviada com sucesso para ${tipo === 'G' ? 'Grupo' : 'Telefone'} ${phone}.`);
                         } catch (mediaErr) {
                             console.error(`[ROUTINE] Erro ao carregar mídia para ID ${idMsg}, tentando texto puro:`, mediaErr);
                             await client.sendMessage(targetId, text);
