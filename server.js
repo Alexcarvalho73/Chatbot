@@ -1368,11 +1368,36 @@ client.on('disconnected', reason => {
 client.on('message_create', async msg => {
     let chat, contact;
     try {
-        chat = await msg.getChat();
-        contact = await msg.getContact();
+        try {
+            chat = await msg.getChat();
+        } catch (e) {
+            console.warn('[MSG] Falha no msg.getChat(), tentando client.getChatById...', e.message);
+            chat = await client.getChatById(msg.from);
+        }
+        
+        try {
+            contact = await msg.getContact();
+        } catch (e) {
+            console.warn('[MSG] Falha no msg.getContact(), tentando client.getContactById...', e.message);
+            contact = await client.getContactById(msg.author || msg.from);
+        }
     } catch (initErr) {
-        console.error('[MSG] Erro ao obter chat/contact (Puppeteer timeout?):', initErr.message);
-        return; // Abandona o processamento desta mensagem
+        console.error('[MSG] Erro ao obter chat/contact via APIs oficiais, criando objetos mockados:', initErr.message);
+        
+        const cleanFrom = msg.from || '';
+        const phoneOnly = cleanFrom.split('@')[0] || '';
+        
+        chat = {
+            id: { _serialized: cleanFrom },
+            isGroup: cleanFrom.includes('@g.us'),
+            name: phoneOnly
+        };
+        
+        contact = {
+            number: phoneOnly,
+            pushname: phoneOnly,
+            name: phoneOnly
+        };
     }
 
     try {
