@@ -808,7 +808,13 @@
         function toggleNewChatModal() { document.getElementById('new-chat-modal').classList.toggle('hidden'); }
         function startNewChat() {
             const phone = document.getElementById('new-phone').value.trim();
-            if (phone) { selectChat(null, phone); socket.emit('send-message', { number: phone, message: 'Olá!' }); toggleNewChatModal(); }
+            if (phone) {
+                const cleanPhone = phone.replace(/\D/g, '');
+                const formatted = cleanPhone.length <= 11 ? '55' + cleanPhone : cleanPhone;
+                selectChat(formatted + '@c.us', phone);
+                socket.emit('send-message', { number: formatted, message: 'Olá!' });
+                toggleNewChatModal();
+            }
         }
 
         // --- Flow Configuration Logic ---
@@ -1064,7 +1070,7 @@
             const formatted = cleanPhone.length <= 11 ? '55' + cleanPhone : cleanPhone;
 
             toggleDizimistas();
-            selectChat(null, name);
+            selectChat(formatted + '@c.us', name);
             socket.emit('send-message', { number: formatted, message: 'Olá!' });
         }
 

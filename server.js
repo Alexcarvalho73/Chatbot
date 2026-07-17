@@ -2566,7 +2566,28 @@ io.on('connection', (socket) => {
             });
             socket.emit('chats', chatData);
         } catch (err) {
-            console.error('Error fetching chats:', err);
+            console.error('Error fetching chats, using fallback cache:', err);
+            try {
+                const dbContacts = await getDizimistasCache();
+                const fallbackChats = [];
+                for (const chatId of Object.keys(messageCache)) {
+                    const phoneOnly = chatId.split('@')[0];
+                    const formatName = dbContacts[phoneOnly]
+                        ? `[D] ${dbContacts[phoneOnly]}`
+                        : (phoneOnly || 'Desconhecido');
+                    const msgs = messageCache[chatId] || [];
+                    const lastMsg = msgs[msgs.length - 1];
+                    fallbackChats.push({
+                        id: chatId,
+                        name: formatName,
+                        unreadCount: 0,
+                        timestamp: lastMsg ? Math.floor(new Date().getTime() / 1000) : 0
+                    });
+                }
+                socket.emit('chats', fallbackChats);
+            } catch (fallbackErr) {
+                console.error('Error in fallback chats:', fallbackErr);
+            }
         }
     });
 
